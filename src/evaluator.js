@@ -57,7 +57,9 @@ async function evaluateEntry(entry, curve) {
     log.warn(`[${tag}] mcap zero/null/NaN`);
     return WAIT('MCAP_ZERO', { mcap });
   }
-  if (mcap > cfg.mcapMax) return DROP('MCAP_TOO_HIGH', { mcap });
+  // V4.2: above the window is NOT permanent any more. Volatile tokens dip back; keep watching
+  // until the 5-minute age limit. Entry after a dip is flagged so it can be analysed separately.
+  if (mcap > cfg.mcapMax) { entry.wasAbove = true; return WAIT('MCAP_TOO_HIGH', { mcap, peak: entry.peakMcap }); }
   if (mcap < cfg.mcapMin) return WAIT('MCAP_TOO_LOW', { mcap, peak: entry.peakMcap });
 
   if (!entry.enteredWindow) {
@@ -135,12 +137,14 @@ async function evaluateEntry(entry, curve) {
   });
   entry.lastScore = score;
 
-  if (score < cfg.minScore) {
+  if (cfg.scoreGateEnabled && score < cfg.minScore) {
     log.info(`[${tag}] score ${score}/100 < ${cfg.minScore}${scaled ? ' (scaled)' : ''} | mcap $${mcap.toFixed(0)} | ` +
       Object.entries(breakdown).map(([k, v]) => `${k}=${v.score}`).join(' '));
     return WAIT('SCORE_GATE', { score, breakdown, scaled });
   }
   if (scaled) greenFlags.push('⚠️ Score scaled — some inputs unavailable');
+  if (!cfg.scoreGateEnabled) greenFlags.push(`Score ${score}/100 (advisory — gate OFF)`);
+  if (entry.wasAbove) greenFlags.push(`⚠️ Dip re-entry — token had peaked at $${Math.round(entry.peakMcap).toLocaleString()}`);
 
   log.info(`[${tag}] ✅✅✅ ALL GATES PASSED — score ${score}/100 mcap $${mcap.toFixed(0)} age ${ageStr}`);
   return PASS({
@@ -156,6 +160,8 @@ async function evaluateEntry(entry, curve) {
     devTxns: devTxns ?? 0,
     top10Pct, greenFlags, redFlags,
     hasTwitter: !!meta.hasTwitter, hasTelegram: !!meta.hasTelegram, hasWebsite: !!meta.hasWebsite,
+    entryMode: entry.wasAbove ? 'dip' : 'climb',
+    peakMcapAtEntry: entry.peakMcap,
     creator: entry.creator,
     detectionSignature: entry.signature,
     creationTime: entry.creationTime,

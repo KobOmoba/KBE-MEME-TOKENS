@@ -12,7 +12,8 @@ let holders = { ok: true, top10Pct: 18, devHoldingPct: 2 };
 pf.getTopHolderConcentration = async () => holders;
 pf.getTxnCount = async () => 180;
 const hel = require('../src/api/helius');
-hel.getTokenMeta = async () => ({ mintAuthorityRevoked: true, freezeAuthorityRevoked: true, hasTwitter: true, hasTelegram: true, hasWebsite: false, symbol: 'TST', name: 'Test' });
+let socials = true;
+hel.getTokenMeta = async () => ({ mintAuthorityRevoked: true, freezeAuthorityRevoked: true, hasTwitter: socials, hasTelegram: socials, hasWebsite: false, symbol: 'TST', name: 'Test' });
 const feed = require('../src/api/pumpportal');
 let feedUp = true;
 feed.subscribe = () => feedUp; feed.unsubscribe = () => {};
@@ -42,11 +43,14 @@ test('token that climbs into the window is bought exactly once, and not before',
   assert.equal(wl.add({ mint: m, creationTime: Date.now() }), false, 'duplicate add rejected');
 });
 
-test('token that jumps straight past $35k is dropped, never bought', async () => {
+test('token above $35k is NOT dropped: not bought while above, bought if it dips back into the window', async () => {
   bought.length = 0;
-  const m = spawn(); mcaps[m] = 6000; await wl.runCycle();
+  const m = spawn(); buys(m); mcaps[m] = 6000; await wl.runCycle();
   mcaps[m] = 52000; await wl.runCycle();
-  assert.equal(bought.length, 0); assert.equal(wl._entries.has(m), false);
+  assert.equal(bought.length, 0, 'never buy above the window'); assert.equal(wl._entries.has(m), true, 'still watched');
+  mcaps[m] = 33000; await wl.runCycle();
+  assert.equal(bought.length, 1, 'dip back into window => buy'); assert.equal(bought[0].entryMode, 'dip');
+  assert.ok(bought[0].peakMcapAtEntry >= 52000);
 });
 
 test('token that never reaches $25k expires and is logged with its peak', async () => {
@@ -104,4 +108,54 @@ test('funnel stats report window entries and peak percentiles', () => {
   const s = stats.getSummary();
   assert.match(s.extraLines, /Entered \$25k-\$35k window: \d+/);
   assert.match(s.extraLines, /median/);
+});
+
+test('score is ADVISORY by default: low-score token is still bought and the score is recorded', async () => {
+  bought.length = 0; socials = false; holders = { ok: true, top10Pct: 28, devHoldingPct: 2 };
+  const m = spawn(); buys(m); mcaps[m] = 28000; await wl.runCycle();
+  assert.equal(bought.length, 1); assert.ok(bought[0].score < cfg.minScore, `score ${bought[0].score} should be below ${cfg.minScore}`);
+  assert.ok(bought[0].scoreBreakdown, 'breakdown stored for later analysis');
+  // and the gate still works when switched on
+  bought.length = 0; cfg.scoreGateEnabled = true;
+  const m2 = spawn(); buys(m2); mcaps[m2] = 28000; await wl.runCycle();
+  assert.equal(bought.length, 0, 'gate ON blocks the same token');
+  wl._entries.delete(m2);                       // do not leak a waiting token into later tests
+  cfg.scoreGateEnabled = false; socials = true; holders = { ok: true, top10Pct: 18, devHoldingPct: 2 };
+});
+
+test('shadow tracking: promising token is followed past 5 min (never bought), late window entry recorded', async () => {
+  bought.length = 0; holders = { ok: true, top10Pct: 42, devHoldingPct: 3 };     // blocks the buy
+  const m = spawn(); buys(m); const e = wl._entries.get(m);
+  e.creationTime = Date.now() - 2.5 * 60000; wl.onTrade({ mint: m, trader: e.creator, type: 'buy' });
+  mcaps[m] = 28000; await wl.runCycle();
+  e.creationTime = Date.now() - 5.5 * 60000; mcaps[m] = 30000; await wl.runCycle();   // 5.5 min: past buy cutoff
+  assert.equal(e.shadow, true); assert.equal(wl._entries.has(m), true);
+  assert.equal(bought.length, 0); assert.ok(e.lateWindowAgeSec >= 330, 'late in-window sighting recorded');
+  mcaps[m] = 90000; await wl.runCycle();
+  e.creationTime = Date.now() - 31 * 60000; await wl.runCycle();                      // shadow period over
+  assert.equal(wl._entries.has(m), false);
+  const line = fs.readFileSync(cfg.watchLogFile, 'utf8').trim().split('\n').map(JSON.parse).find(x => x.mint === m);
+  assert.equal(line.shadow, true); assert.equal(line.peakMcap, 90000); assert.ok(line.lateWindowAgeSec >= 330);
+  holders = { ok: true, top10Pct: 18, devHoldingPct: 2 };
+});
+
+test('moon bag: 12% trailing stop from ATH, only after BOTH tiers', async () => {
+  const sellerMod = require('../src/seller'); const sells = [];
+  sellerMod.executeSell = async (pos, _p, reason, pct, price) => { sells.push({ reason, pct, price }); };
+  pf.getBondingCurveData = async () => ({ priceUSD: px });
+  cfg.positionsFile = path.join(os.tmpdir(), `pos_${Date.now()}.json`);
+  const tracker = require('../src/tracker');
+  let px = 1; const positions = new Map(); tracker.init(positions);
+  const mk = (o) => ({ mint: 'M' + Math.random(), ticker: 'T', entryPrice: 1, currentPrice: 1, peakPrice: 1, timerExpiry: Date.now() + 9e5,
+    tier1Sold: true, tier2Sold: true, stopLossAlerted: false, paperTrade: true, ...o });
+
+  const p = mk({}); positions.set(p.mint, p);
+  px = 5.0; await tracker.runMonitorCycle(); assert.equal(sells.length, 0, 'new ATH 5x, no sell');
+  px = 4.5; await tracker.runMonitorCycle(); assert.equal(sells.length, 0, '-10% from ATH: hold');
+  px = 4.39; await tracker.runMonitorCycle(); assert.equal(sells.length, 1, '-12.2% from ATH: sell');
+  assert.equal(sells[0].reason, 'STOP_LOSS'); assert.equal(sells[0].pct, cfg.moonBagPct);
+
+  sells.length = 0; positions.clear();
+  const q = mk({ tier2Sold: false, peakPrice: 4.2 }); positions.set(q.mint, q);   // tier 2 NOT done => no stop
+  px = 2.0; await tracker.runMonitorCycle(); assert.equal(sells.filter(x => x.reason === 'STOP_LOSS').length, 0, 'no stop before both tiers');
 });

@@ -43,10 +43,10 @@ async function main() {
   const mode = cfg.paperTrade ? 'PAPER TRADING' : '🔴 LIVE TRADING';
   log.info(`Mode: ${mode}`);
   log.info(`MCap window: $${cfg.mcapMin.toLocaleString()} – $${cfg.mcapMax.toLocaleString()}`);
-  log.info(`Min score: ${cfg.minScore}/100`);
+  log.info(cfg.scoreGateEnabled ? `Min score: ${cfg.minScore}/100` : 'Score gate: OFF (advisory only, recorded on every trade)');
   log.info(`Min liquidity: $${cfg.minLiquidityForBuy.toLocaleString()}`);
   log.info(`Trade size: $${cfg.tradeSize}`);
-  log.info(`Exit tiers: 2x(50%) → 4x(30%) → moon bag(20%) stop@1.5x`);
+  log.info(`Exit tiers: 2x(50%) → 4x(30%) → moon bag(20%) ${cfg.moonBagStopMode === 'trail' ? `trailing ${cfg.moonBagTrailPct}% from ATH` : `stop@${cfg.moonBagStopMultiple}x`}`);
   log.info(`Time exit: ${cfg.maxHoldMinutes} min if no 2x`);
 
   if (!cfg.paperTrade) {

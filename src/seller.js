@@ -132,7 +132,7 @@ async function executeSell(pos, positions, reason, percentage, currentPrice) {
     if (reason === 'TIER2') {
       pos.tier2Sold   = true;
       pos.moonBagActive = true;
-      log.info(`[${pos.ticker}] Tier 2 done — moon bag (20%) now active with 1.5x stop`);
+      log.info(`[${pos.ticker}] Tier 2 done — moon bag (20%) now active with protective stop`);
     }
 
     if (reason === 'STOP_LOSS' || reason === 'TIME_EXIT' || remainingPct <= 0) {

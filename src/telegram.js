@@ -68,6 +68,9 @@ async function sendScanSummary(s) {
 async function sendBuyConfirmation(pos) {
   const mode   = pos.paperTrade ? '📄 PAPER TRADE — ' : '';
   const t1stop = (pos.entryPrice * cfg.moonBagStopMultiple).toFixed(8);
+  const stopLine = cfg.moonBagStopMode === 'trail'
+    ? `Moon bag stop: trailing ${cfg.moonBagTrailPct}% from ATH (after 4x)`
+    : `Moon bag stop: ${cfg.moonBagStopMultiple}x = $${t1stop}`;
   const t1     = (pos.entryPrice * cfg.tier1Multiple).toFixed(8);
   const t2     = (pos.entryPrice * cfg.tier2Multiple).toFixed(8);
   const green  = (pos.greenFlags || []).join('\n  ') || 'None listed';
@@ -96,7 +99,7 @@ async function sendBuyConfirmation(pos) {
     `Priority fee (sell): 5M lamports`,
     ``,
     `<b>Exit targets:</b>`,
-    `  Moon bag stop: 1.5x = $${t1stop}`,
+    `  ${stopLine}`,
     `  Tier 1 (50%):  2x   = $${t1}`,
     `  Tier 2 (30%):  4x   = $${t2}`,
     `  Moon bag (20%): riding`,
@@ -114,7 +117,7 @@ async function sendExitNotification(pos, reason, details = {}) {
   const tierMap = {
     TIER1:      'TIER 1 (2x)',
     TIER2:      'TIER 2 (4x)',
-    STOP_LOSS:  'MOON BAG STOP (1.5x)',
+    STOP_LOSS:  'MOON BAG STOP (trailing)',
     TIME_EXIT:  'TIME EXIT (15 min)',
   };
   const tierLabel = tierMap[reason] || reason;
@@ -149,7 +152,7 @@ async function sendStartup(mode) {
     `🚀 <b>AariNAT Sniper V4 — STARTED</b>`,
     `Mode: ${mode}`,
     `MCap window: $25k–$35k`,
-    `Score minimum: 65/100`,
+    cfg.scoreGateEnabled ? `Score minimum: ${cfg.minScore}/100` : `Score gate: OFF (advisory only)`,
     `Detection: WebSocket (Pump.fun bypassed ✅)`,
     `Loops: Scanner + Monitor + PreSign`,
     `Reports: Every 30 min — shows why tokens are being rejected`,

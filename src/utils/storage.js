@@ -69,9 +69,11 @@ function savePaperStats(action, position, details = {}) {
     if (action === 'BUY') {
       stats.totalBuys++;
       stats.totalInvested += (position.amountUSD || 0) + (details.feeUSD || 0);   // stake + buy fee
+      stats.totalFees = (stats.totalFees || 0) + (details.feeUSD || 0);
     } else if (action === 'SELL') {
       stats.totalSells++;
-      stats.totalReturned += details.amountOut || 0;
+      stats.totalReturned += details.amountOut || 0;   // net of slippage + sell fee
+      stats.totalFees = (stats.totalFees || 0) + (details.feeUSD || 0);
     }
 
     stats.trades.push(entry);
@@ -85,6 +87,7 @@ function savePaperStats(action, position, details = {}) {
     stats.pnlPercent     = stats.totalInvested > 0
       ? ((stats.pnl / stats.totalInvested) * 100).toFixed(2)
       : '0.00';
+    stats.grossPnl       = stats.pnl + (stats.totalFees || 0);   // P&L before fees (net = pnl)
     stats.lastUpdated    = new Date().toISOString();
 
     writeJSON(cfg.paperStatsFile, stats);

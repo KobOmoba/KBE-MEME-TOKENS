@@ -22,7 +22,10 @@ module.exports = {
   mcapMin:                 25000,   // V3 §2.2 — $25k min (was $50k in V1)
   mcapMax:                 35000,   // V3 §2.2 — $35k max (was $5M in V1)
   minLiquidityForBuy:      10000,   // V3 §2.3 — $10k min liquidity
-  minScore:                65,      // V3 §2.6 — 65/100 minimum (was 80 in V1)
+  minScore:                65,      // V3 §2.6 — only enforced when scoreGateEnabled
+  // V4.2 (Bayo decision): score is ADVISORY by default. It is still computed and stored on every
+  // paper trade so win-rate by score can be measured. Turn back on with SCORE_GATE=on in .env.
+  scoreGateEnabled:        process.env.SCORE_GATE === 'on',
   maxWalletConcentration:  30,      // V3 §2.5 — top 10 wallets < 30% to pass
   devMaxHoldingPct:        10,      // V3 §2.5 — dev override: dev < 10% of supply
   devTransactionGraceMin:  3,       // V3 §2.5 — dev override: zero txns in first 3 min
@@ -37,12 +40,18 @@ module.exports = {
   // TASK 1 FIX: 1.5x moon bag stop REPLACES the 999% workaround in config.js line 56
   // The stop loss only fires AFTER BOTH tier1 AND tier2 have executed.
   // Before both tiers, only the 15-minute time exit applies.
-  moonBagStopMultiple:  1.5,   // exit final 20% if price falls back to 1.5x from entry
+  // V4.2 (Bayo decision): once BOTH tiers are done (80% sold, stake + profit banked), the last
+  // 20% is protected by a TRAILING stop: sell if price falls moonBagTrailPct% below its ATH
+  // since entry. Set moonBagStopMode:'fixed' to go back to the 1.5x-from-entry floor.
+  moonBagStopMode:      'trail',
+  moonBagTrailPct:      12,
+  moonBagStopMultiple:  1.5,   // only used when moonBagStopMode === 'fixed'   // exit final 20% if price falls back to 1.5x from entry
   maxHoldMinutes:       15,    // time exit: if no 2x in 15 min → exit 100%
 
   // ─── WATCHLIST (V4.2) ───────────────────────────────────────────────────────
   watchIntervalMs:   5000,     // re-check every watched token this often (one batched RPC call)
-  maxWatchlist:      400,      // safety cap for RAM / RPC on the 956MB server
+  maxWatchlist:      400,
+  shadowTrackMinutes: 30,      // keep following tokens that reached $25k after the 5-min buy cutoff (data only, never bought)      // safety cap for RAM / RPC on the 956MB server
   pumpPortalEnabled: process.env.PUMPPORTAL !== 'off',   // trade feed + backup detection
   watchLogFile:      './data/watch_log.jsonl',           // per-token mcap trajectories (research data)
 

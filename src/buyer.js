@@ -159,6 +159,12 @@ function buildPosition(tokenData, isPaper, overrides = {}) {
     amountUSD:        cfg.tradeSize,
     tokenAmount:      overrides.tokenAmount   || (cfg.tradeSize / tokenData.entryPrice),
 
+    peakPrice:        overrides.entryPrice || tokenData.entryPrice,   // ATH since entry (trailing stop)
+    entryMode:        tokenData.entryMode || null,
+    peakMcapAtEntry:  tokenData.peakMcapAtEntry || null,
+    scoreBreakdown:   tokenData.scoreBreakdown || null,
+    scoreScaled:      !!tokenData.scoreScaled,
+
     // Entry metadata
     entryTime:        Date.now(),
     timerExpiry:      Date.now() + (cfg.maxHoldMinutes * 60 * 1000),

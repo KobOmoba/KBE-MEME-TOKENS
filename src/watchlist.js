@@ -1,21 +1,25 @@
 /**
- * Watchlist — Loop 1 (scanner) second half.
+ * Watchlist — Loop 1 (scanner) second half.  V4.2
  *
  * Detection (Helius WebSocket + PumpPortal backup) calls add(). A non-overlapping cycle every
  * cfg.watchIntervalMs then:
- *   1. expires tokens at maxTokenAgeMinutes
+ *   1. expires tokens at maxTokenAgeMinutes (no more buys after that)
  *   2. fetches ALL bonding curves in one batched RPC call
  *   3. runs evaluateEntry() on each; buys on PASS
  *
- * It also writes data/watch_log.jsonl: one line per token with its mcap trajectory. This is
- * the dataset to decide entry strategy (window vs block-0 vs volume-spike) from EVIDENCE.
+ * SHADOW TRACKING: a token that reached >= mcapMin but was not bought is NOT forgotten at
+ * 5 minutes. It is followed (data only, never bought) up to cfg.shadowTrackMinutes so we can
+ * measure how many "missed" tokens really ran. This is the evidence for whether the age /
+ * mcap cutoffs cost us winners.
+ *
+ * data/watch_log.jsonl: one line per token with its mcap trajectory ([ageSec, mcapUSD]).
  */
 
 const fs = require('fs');
 const path = require('path');
 const cfg = require('../config');
 const { PublicKey } = require('@solana/web3.js');
-const { getBondingCurvePda, getBondingCurvesBatch } = require('./api/pumpfun');
+const pumpfun = require('./api/pumpfun');
 const { evaluateEntry } = require('./evaluator');
 const { executeBuy } = require('./buyer');
 const feed = require('./api/pumpportal');
@@ -28,7 +32,12 @@ const SEEN_MAX = 5000;
 let running = false;
 let timer = null;
 
-const _deps = { getBondingCurvesBatch, executeBuy, now: () => Date.now() };   // test hooks
+const _deps = { getBondingCurvesBatch: pumpfun.getBondingCurvesBatch, executeBuy, now: () => Date.now() };   // test hooks
+
+function getPda(mint) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('bonding-curve'), new PublicKey(mint).toBytes()], pumpfun.PUMP_FUN_PROGRAM)[0];
+}
 
 function add(det) {
   if (!det || !det.mint || seen.has(det.mint)) return false;
@@ -43,8 +52,8 @@ function add(det) {
     return false;
   }
   if (entries.size >= cfg.maxWatchlist) {                  // safety valve for RAM / RPC
-    const oldest = entries.values().next().value;
-    finalize(oldest, 'DROP', 'WATCHLIST_FULL', {});
+    const victim = [...entries.values()].find(e => !e.shadow) || entries.values().next().value;
+    finalize(victim, 'DROP', 'WATCHLIST_FULL', {});
   }
 
   let pda;
@@ -56,23 +65,17 @@ function add(det) {
     addedAt: _deps.now(),
     peakMcap: 0, peakAgeSec: null, firstMcap: null, samples: [], lastSampleAt: 0,
     buys: 0, sells: 0, trades: 0, devTxns: 0, devSold: false, feed: false,
-    enteredWindow: false, lastBlocker: null, lastDetail: null,
+    enteredWindow: false, wasAbove: false, shadow: false, rejectionRecorded: false,
+    lateWindowAgeSec: null, graduatedAgeSec: null, lastBlocker: null, lastDetail: null,
   };
   entry.feed = feed.subscribe(det.mint);
   entries.set(det.mint, entry);
   return true;
 }
 
-function getPda(mint) {
-  // synchronous PDA derivation (same seeds as pumpfun.getBondingCurvePda)
-  const { PUMP_FUN_PROGRAM } = require('./api/pumpfun');
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from('bonding-curve'), new PublicKey(mint).toBytes()], PUMP_FUN_PROGRAM)[0];
-}
-
 function onTrade(t) {
   const e = entries.get(t.mint);
-  if (!e) return;
+  if (!e || e.shadow) return;
   e.trades++;
   if (t.type === 'buy') e.buys++; else e.sells++;
   if (e.creator && t.trader === e.creator) {
@@ -84,7 +87,9 @@ function onTrade(t) {
 function finalize(entry, status, reason, detail) {
   entries.delete(entry.mint);
   feed.unsubscribe(entry.mint);
-  if (status !== 'PASS') stats.recordRejection(reason, { ...detail, peak: entry.peakMcap });
+  if (status !== 'PASS' && !entry.rejectionRecorded) {
+    stats.recordRejection(reason, { ...detail, peak: entry.peakMcap });
+  }
   writeWatchLog(entry, status, reason);
 }
 
@@ -97,6 +102,7 @@ function writeWatchLog(e, status, reason) {
       mint: e.mint, sym: e.symbol || null, src: e.source, created: e.creationTime,
       firstMcap: e.firstMcap && Math.round(e.firstMcap), peakMcap: Math.round(e.peakMcap),
       peakAgeSec: e.peakAgeSec, inWindow: e.enteredWindow, windowAgeSec: e.windowAgeSec ?? null,
+      wasAbove: e.wasAbove, shadow: e.shadow, lateWindowAgeSec: e.lateWindowAgeSec, gradAgeSec: e.graduatedAgeSec,
       buys: e.buys, sells: e.sells, devSold: e.devSold, feed: e.feed,
       end: status, why: reason, s: e.samples,          // s = [[ageSec, mcapUSD], ...]
     }) + '\n');
@@ -108,16 +114,30 @@ async function runCycle() {
   running = true;
   try {
     const now = _deps.now();
+
+    // 1. expiry: stop BUYING at maxTokenAgeMinutes; promising tokens continue as shadow (data only)
     for (const e of [...entries.values()]) {
-      if ((now - e.creationTime) / 60000 >= cfg.maxTokenAgeMinutes) {
-        finalize(e, 'EXPIRED', e.lastBlocker || 'MCAP_TOO_LOW', e.lastDetail || {});
+      const ageMin = (now - e.creationTime) / 60000;
+      if (e.shadow) {
+        if (ageMin >= cfg.shadowTrackMinutes) finalize(e, 'SHADOW_END', e.lastBlocker || 'MCAP_TOO_LOW', e.lastDetail || {});
+        continue;
+      }
+      if (ageMin >= cfg.maxTokenAgeMinutes) {
+        const reason = e.lastBlocker || 'MCAP_TOO_LOW', detail = e.lastDetail || {};
+        stats.recordRejection(reason, { ...detail, peak: e.peakMcap });
+        e.rejectionRecorded = true;
+        if (cfg.shadowTrackMinutes > cfg.maxTokenAgeMinutes && e.peakMcap >= cfg.mcapMin) {
+          e.shadow = true; feed.unsubscribe(e.mint);
+        } else finalize(e, 'EXPIRED', reason, detail);
       }
     }
-    stats.setWatching(entries.size);
+    stats.setWatching([...entries.values()].filter(e => !e.shadow).length);
     if (!entries.size) return;
 
+    // 2. one batched RPC call for every watched token
     const curves = await _deps.getBondingCurvesBatch([...entries.values()].map(e => ({ mint: e.mint, pda: e.pda })));
 
+    // 3. evaluate
     for (const e of [...entries.values()]) {
       if (!entries.has(e.mint)) continue;
       const curve = curves.get(e.mint);
@@ -127,9 +147,20 @@ async function runCycle() {
         const m = curve.marketCapUSD;
         if (e.firstMcap === null) e.firstMcap = m;
         if (m > e.peakMcap) { e.peakMcap = m; e.peakAgeSec = ageSec; }
-        if (now - e.lastSampleAt >= 9000 && e.samples.length < 40) {
+        const every = e.shadow ? 30000 : 9000, cap = e.shadow ? 100 : 40;
+        if (now - e.lastSampleAt >= every && e.samples.length < cap) {
           e.samples.push([ageSec, Math.round(m)]); e.lastSampleAt = now;
         }
+        if (ageSec / 60 >= cfg.maxTokenAgeMinutes && m >= cfg.mcapMin && m <= cfg.mcapMax && e.lateWindowAgeSec === null) {
+          e.lateWindowAgeSec = ageSec;                            // would have qualified, but too old
+        }
+      } else if (curve && curve.state === 'graduated' && e.graduatedAgeSec === null) {
+        e.graduatedAgeSec = ageSec;
+      }
+
+      if (e.shadow) {                                             // follow only, never buy
+        if (curve && curve.state === 'graduated') finalize(e, 'SHADOW_END', 'GRADUATED', {});
+        continue;
       }
 
       let res;
@@ -158,10 +189,10 @@ function start() {
   feed.start({
     onCreate: (d) => add(d),
     onTrade,
-    getWatched: () => [...entries.keys()],
+    getWatched: () => [...entries.values()].filter(e => !e.shadow).map(e => e.mint),
   });
   timer = setInterval(() => runCycle().catch(e => log.error(e.message)), cfg.watchIntervalMs);
-  log.info(`Watchlist started — cycle every ${cfg.watchIntervalMs / 1000}s, max ${cfg.maxWatchlist} tokens`);
+  log.info(`Watchlist started — cycle every ${cfg.watchIntervalMs / 1000}s, max ${cfg.maxWatchlist} tokens, shadow-track ${cfg.shadowTrackMinutes} min`);
 }
 
 module.exports = { add, start, runCycle, onTrade, _entries: entries, _deps };

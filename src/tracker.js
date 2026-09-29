@@ -80,6 +80,7 @@ async function checkPosition(pos) {
   }
 
   const currentMultiple = currentPrice / pos.entryPrice;
+  pos.peakPrice = Math.max(pos.peakPrice || pos.entryPrice, currentPrice);   // ATH since entry
 
   log.debug(`[${pos.ticker}] ${currentMultiple.toFixed(3)}x @ $${currentPrice.toFixed(8)}`
     + ` | tier1=${pos.tier1Sold} tier2=${pos.tier2Sold}`);
@@ -127,21 +128,24 @@ async function checkPosition(pos) {
   // const tier2Done = pos.tier2Sold;
   // if (tier1Done && tier2Done && currentMultiple < 1.5) → FIRE
   // ─────────────────────────────────────────────────────────────────────────
-  if (pos.tier1Sold && pos.tier2Sold && currentMultiple < cfg.moonBagStopMultiple) {
-    if (pos.stopLossAlerted) {
-      // Sell is already in flight from a previous cycle — don't duplicate
-      log.debug(`[${pos.ticker}] Stop loss in flight (stopLossAlerted=true) — skipping`);
+  if (pos.tier1Sold && pos.tier2Sold) {
+    const trail    = cfg.moonBagStopMode === 'trail';
+    const stopPrice = trail
+      ? pos.peakPrice * (1 - cfg.moonBagTrailPct / 100)      // 12% below ATH
+      : pos.entryPrice * cfg.moonBagStopMultiple;            // legacy fixed floor
+    if (currentPrice < stopPrice) {
+      if (pos.stopLossAlerted) {
+        log.debug(`[${pos.ticker}] Moon bag stop in flight (stopLossAlerted=true) — skipping`);
+        return;
+      }
+      log.info(`[${pos.ticker}] MOON BAG STOP — ${currentMultiple.toFixed(2)}x`
+             + (trail ? ` (ATH ${(pos.peakPrice / pos.entryPrice).toFixed(2)}x, trail ${cfg.moonBagTrailPct}%)`
+                      : ` (below ${cfg.moonBagStopMultiple}x floor)`));
+      pos.stopLossAlerted = true;
+      // PITFALL FIX #3: seller.js resets stopLossAlerted=false if the sell fails => retry next cycle
+      await executeSell(pos, positions, 'STOP_LOSS', cfg.moonBagPct, currentPrice);
       return;
     }
-
-    log.info(`[${pos.ticker}] MOON BAG STOP — price fell to ${currentMultiple.toFixed(3)}x`
-           + ` (below ${cfg.moonBagStopMultiple}x floor)`);
-
-    pos.stopLossAlerted = true;
-    // PITFALL FIX #3: seller.js will reset stopLossAlerted=false if the sell fails,
-    // so the next monitor cycle will retry.
-    await executeSell(pos, positions, 'STOP_LOSS', cfg.moonBagPct, currentPrice);
-    return;
   }
 }
 
