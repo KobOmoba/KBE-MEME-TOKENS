@@ -49,7 +49,7 @@ module.exports = {
   maxHoldMinutes:       15,    // time exit: if no 2x in 15 min → exit 100%
 
   // ─── WATCHLIST (V4.2) ───────────────────────────────────────────────────────
-  watchIntervalMs:   5000,     // re-check every watched token this often (one batched RPC call)
+  watchIntervalMs:   10000,    // re-check every watched token this often (one batched RPC call = 1 credit; 10s ~ 260k/month)
   maxWatchlist:      400,
   shadowTrackMinutes: 30,      // keep following tokens that reached $25k after the 5-min buy cutoff (data only, never bought)      // safety cap for RAM / RPC on the 956MB server
   pumpPortalEnabled: process.env.PUMPPORTAL !== 'off',   // trade feed + backup detection

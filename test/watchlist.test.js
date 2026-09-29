@@ -159,3 +159,8 @@ test('moon bag: 12% trailing stop from ATH, only after BOTH tiers', async () => 
   const q = mk({ tier2Sold: false, peakPrice: 4.2 }); positions.set(q.mint, q);   // tier 2 NOT done => no stop
   px = 2.0; await tracker.runMonitorCycle(); assert.equal(sells.filter(x => x.reason === 'STOP_LOSS').length, 0, 'no stop before both tiers');
 });
+
+test('PumpPortal is not "healthy" unless connected and delivering (Helius fallback stays on)', () => {
+  const real = require('../src/api/pumpportal');
+  assert.equal(real.isHealthy(), false);
+});

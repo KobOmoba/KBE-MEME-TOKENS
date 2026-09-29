@@ -68,6 +68,8 @@ async function main() {
   const health = await checkHealth();
   if (!health.ok) {
     log.error('RPC health check FAILED:', health.error);
+    log.error('Waiting 60s before exit so PM2 does not spam a rate-limited endpoint...');
+    await new Promise(r => setTimeout(r, 60000));
     process.exit(1);
   }
   log.info(`RPC OK — slot ${health.slot}, epoch ${health.epoch}`);

@@ -15,6 +15,7 @@ const WebSocket = require('ws');
 const cfg       = require('../config');
 const { extractMintFromTx } = require('./api/pumpfun');
 const watchlist             = require('./watchlist');
+const feed                  = require('./api/pumpportal');
 const log                   = require('./utils/logger').forTag('SCANNER');
 
 const PUMP_FUN_PROGRAM  = '6EF8rrectrRdC4KjqW7GqK9Wz9hEndkbskZaZKzhW9Ep';
@@ -84,6 +85,10 @@ function startScanner() {
 
         const sig = value.signature;
         if (!sig) return;
+
+        // V4.2 credit saver: every Helius detection costs a getTransaction (1+ credits). While
+        // PumpPortal is delivering new tokens for free, skip this path. It is the FALLBACK.
+        if (feed.isHealthy()) return;
 
         // Dedup
         if (seenSignatures.has(sig)) return;

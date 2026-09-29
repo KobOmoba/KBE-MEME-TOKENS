@@ -24,6 +24,7 @@ let onCreate = () => {};
 let onTrade  = () => {};
 let getWatched = () => [];
 let retry = 0;
+let lastCreateAt = 0;
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
 
@@ -56,6 +57,7 @@ function connect() {
     if (!m || m.message || m.errors || !m.mint) return;          // acks / errors
 
     if (m.txType === 'create') {
+      lastCreateAt = Date.now();
       if (!sampleLogged.create) { sampleLogged.create = true; log.info('PP sample create: ' + JSON.stringify(m).slice(0, 300)); }
       onCreate({
         mint: m.mint, creator: m.traderPublicKey || null, name: m.name, symbol: m.symbol,
@@ -90,5 +92,8 @@ function unsubscribe(mint) {
   subscribed.delete(mint);
 }
 const isConnected = () => connected;
+// Healthy = connected AND a create event arrived in the last 60s. If the message shape ever
+// differs from what we expect, this goes false and Helius log-detection takes over again.
+const isHealthy = () => connected && (Date.now() - lastCreateAt) < 60000;
 
-module.exports = { start, subscribe, unsubscribe, isConnected };
+module.exports = { start, subscribe, unsubscribe, isConnected, isHealthy };
