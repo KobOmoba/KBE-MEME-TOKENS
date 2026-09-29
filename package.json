@@ -1,12 +1,13 @@
 {
   "name": "kbe-meme-tokens",
-  "version": "4.0.0",
-  "description": "AariNAT Solana Meme Token Sniper — V4 (WebSocket, all bugs fixed)",
+  "version": "4.2.0",
+  "description": "AariNAT Solana Meme Token Sniper \u2014 V4.2 (watchlist re-evaluation, fixed scorer, realistic paper fills)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "paper": "PAPER_OVERRIDE=true node index.js",
-    "pm2": "pm2 start index.js --name scanner --max-memory-restart 400M"
+    "pm2": "pm2 start index.js --name scanner --max-memory-restart 400M",
+    "test": "node --test test/watchlist.test.js"
   },
   "dependencies": {
     "@solana/web3.js": "^1.95.4",

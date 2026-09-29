@@ -40,6 +40,17 @@ module.exports = {
   moonBagStopMultiple:  1.5,   // exit final 20% if price falls back to 1.5x from entry
   maxHoldMinutes:       15,    // time exit: if no 2x in 15 min → exit 100%
 
+  // ─── WATCHLIST (V4.2) ───────────────────────────────────────────────────────
+  watchIntervalMs:   5000,     // re-check every watched token this often (one batched RPC call)
+  maxWatchlist:      400,      // safety cap for RAM / RPC on the 956MB server
+  pumpPortalEnabled: process.env.PUMPPORTAL !== 'off',   // trade feed + backup detection
+  watchLogFile:      './data/watch_log.jsonl',           // per-token mcap trajectories (research data)
+
+  // ─── PAPER REALISM (V4.2) ───────────────────────────────────────────────────
+  // Paper fills used to be exact trigger prices with zero fees. Fees are modelled from the
+  // same lamport settings the live bot uses; slippage haircut applied to every paper fill.
+  paperSlippageBps:  500,      // 5% haircut on every paper buy and sell
+
   // ─── POSITION SIZING ────────────────────────────────────────────────────────
   tradeSize:        2.00,    // USD equivalent (was $5-$10 in V1, fixed in commit 4)
   slippageBps:      1500,    // 15% slippage — required for meme tokens

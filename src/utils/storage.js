@@ -68,7 +68,7 @@ function savePaperStats(action, position, details = {}) {
 
     if (action === 'BUY') {
       stats.totalBuys++;
-      stats.totalInvested += position.amountUSD || 0;
+      stats.totalInvested += (position.amountUSD || 0) + (details.feeUSD || 0);   // stake + buy fee
     } else if (action === 'SELL') {
       stats.totalSells++;
       stats.totalReturned += details.amountOut || 0;

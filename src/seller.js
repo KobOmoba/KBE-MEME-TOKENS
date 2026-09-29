@@ -16,6 +16,7 @@ const cfg                              = require('../config');
 const { firePresignedSell }            = require('./api/jito');
 const { buildPresignedSell }           = require('./api/jupiter');
 const { savePaperStats, saveTracked }  = require('./utils/storage');
+const { getSolPrice }                  = require('./api/rpc');
 const telegram                         = require('./telegram');
 const log                              = require('./utils/logger').forTag('SELLER');
 
@@ -48,20 +49,28 @@ async function executeSell(pos, positions, reason, percentage, currentPrice) {
     elapsed = '0.00';
     method  = 'paper';
 
+    // V4.2 paper realism: slippage haircut + the same sell fee + Jito tip the live bot pays
+    const solPrice = await getSolPrice();
+    const feeUSD   = ((cfg.priorityFeeSell + cfg.jitoTipLamports) / 1e9) * solPrice;
+    const netUSD   = Math.max(0, amountUSD * (1 - cfg.paperSlippageBps / 10000) - feeUSD);
+    pos.paperFeesUSD = (pos.paperFeesUSD || 0) + feeUSD;
+
     // PITFALL FIX #2: savePaperStats MUST be called on every paper sell
     await savePaperStats('SELL', pos, {
       reason,
       percentage,
-      amountOut:  amountUSD,
+      grossOut:   amountUSD,
+      feeUSD,
+      amountOut:  netUSD,
       multiple:   multiple.toFixed(2),
     });
     // PITFALL FIX #2: saveTracked MUST be called on every sell
     await saveTracked('SELL', pos, { reason, percentage });
 
-    pos.totalRecovered = (pos.totalRecovered || 0) + amountUSD;
-    pos.exits.push({ reason, percentage, amountUSD, multiple, ts: Date.now() });
+    pos.totalRecovered = (pos.totalRecovered || 0) + netUSD;
+    pos.exits.push({ reason, percentage, amountUSD: netUSD, multiple, ts: Date.now() });
 
-    log.info(`[PAPER] ${pos.ticker} ${reason}: $${amountUSD.toFixed(4)} out (${multiple.toFixed(2)}x)`);
+    log.info(`[PAPER] ${pos.ticker} ${reason}: $${netUSD.toFixed(4)} net out ($${amountUSD.toFixed(4)} gross, $${feeUSD.toFixed(3)} fees) (${multiple.toFixed(2)}x)`);
 
   } else {
     // ─── LIVE TRADE — VIA JITO BUNDLE ─────────────────────────────────────

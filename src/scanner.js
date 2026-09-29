@@ -14,12 +14,12 @@
 const WebSocket = require('ws');
 const cfg       = require('../config');
 const { extractMintFromTx } = require('./api/pumpfun');
-const { evaluate }          = require('./evaluator');
-const { executeBuy }        = require('./buyer');
+const watchlist             = require('./watchlist');
 const log                   = require('./utils/logger').forTag('SCANNER');
 
 const PUMP_FUN_PROGRAM  = '6EF8rrectrRdC4KjqW7GqK9Wz9hEndkbskZaZKzhW9Ep';
-const CREATE_LOG_FILTER = 'Instruction: Create';
+// matches 'Instruction: Create' and 'Instruction: CreateV2' but not e.g. CreateIdempotent
+const CREATE_LOG_RE = /Instruction: Create(V2)?$/;
 
 // Dedup recently seen signatures
 const seenSignatures = new Set();
@@ -80,7 +80,7 @@ function startScanner() {
         const value = msg.params?.result?.value;
         if (!value) return;
         if (value.err !== null) return;
-        if (!value.logs?.some(l => l.includes(CREATE_LOG_FILTER))) return;
+        if (!value.logs?.some(l => CREATE_LOG_RE.test(l))) return;
 
         const sig = value.signature;
         if (!sig) return;
@@ -136,28 +136,10 @@ async function processNewToken(signature) {
     log.debug(`Could not extract mint from: ${signature.slice(0, 16)}...`);
     return;
   }
-
-  const { mint, creationTime, creator } = detection;
-  log.info(`New token: ${mint.slice(0, 8)}... | creator: ${creator?.slice(0, 8) || '?'}`);
-
-  let evalResult;
-  try {
-    evalResult = await evaluate(detection);
-  } catch (err) {
-    log.error(`evaluate() error for ${mint.slice(0, 8)}:`, err.message);
-    return;
-  }
-
-  if (!evalResult.pass) {
-    log.debug(`[${mint.slice(0, 8)}] BLOCKED — ${evalResult.reason}`);
-    return;
-  }
-
-  log.info(`✅ [${evalResult.data.ticker}] All gates passed — executing buy`);
-  try {
-    await executeBuy(evalResult.data);
-  } catch (err) {
-    log.error(`executeBuy error for ${evalResult.data.ticker}:`, err.message);
+  // V4.2: do NOT evaluate once and forget. Put the token on the watchlist; the watch cycle
+  // re-checks it every few seconds while it climbs toward the $25k-$35k window.
+  if (watchlist.add(detection)) {
+    log.info(`New token: ${detection.mint.slice(0, 8)}... | creator: ${detection.creator?.slice(0, 8) || '?'} | watching`);
   }
 }
 
@@ -165,6 +147,7 @@ async function processNewToken(signature) {
 
 async function maintainScanner() {
   let failCount = 0;
+  watchlist.start();
 
   while (true) {
     try {

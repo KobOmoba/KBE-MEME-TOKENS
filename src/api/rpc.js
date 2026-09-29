@@ -62,31 +62,59 @@ function getWallet() {
   return _wallet;
 }
 
-// ─── SOL price (from Jupiter) ────────────────────────────────────────────────
+// ─── SOL price ───────────────────────────────────────────────────────────────
+// V4.2: price.jup.ag/v6 is retired. The old code retried a dead endpoint (5s timeout)
+// on EVERY call, stalling every evaluation and pricing mcap off a stale $150.
+// Now: try several free sources, cache 60s, back off 15s on total failure, share one
+// in-flight request between callers.
 
 let _solPrice     = 150;
 let _solPriceAt   = 0;
-const SOL_PRICE_TTL = 60000; // Refresh every 60 seconds
+let _solInflight  = null;
+const SOL_PRICE_TTL  = 60000;
+const SOL_FAIL_RETRY = 15000;
+
+const SOL_SOURCES = [
+  { name: 'coinbase', url: 'https://api.coinbase.com/v2/prices/SOL-USD/spot',
+    pick: d => parseFloat(d?.data?.amount) },
+  { name: 'jupiter',  url: `https://lite-api.jup.ag/price/v3?ids=${cfg.solMint}`,
+    pick: d => d?.[cfg.solMint]?.usdPrice },
+];
+
+async function fetchSolPrice() {
+  for (const src of SOL_SOURCES) {
+    try {
+      const resp = await fetch(src.url, { signal: AbortSignal.timeout(3000) });
+      if (!resp.ok) continue;
+      const price = Number(src.pick(await resp.json()));
+      if (price > 5 && price < 2000) {
+        log.debug(`SOL price ${price} via ${src.name}`);
+        return price;
+      }
+    } catch (_) { /* try next source */ }
+  }
+  return null;
+}
 
 async function getSolPrice() {
   const now = Date.now();
   if (now - _solPriceAt < SOL_PRICE_TTL) return _solPrice;
+  if (_solInflight) return _solInflight;
 
-  try {
-    const url = `${cfg.jupiterPriceUrl}?ids=${cfg.solMint}`;
-    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    const price = data?.data?.[cfg.solMint]?.price;
-    if (price && price > 0) {
+  _solInflight = (async () => {
+    const price = await fetchSolPrice();
+    if (price) {
       _solPrice   = price;
-      _solPriceAt = now;
-      log.debug(`SOL price updated: $${price}`);
+      _solPriceAt = Date.now();
+    } else {
+      // Back off so we do not hammer dead endpoints on every evaluation
+      _solPriceAt = Date.now() - SOL_PRICE_TTL + SOL_FAIL_RETRY;
+      log.warn(`Could not refresh SOL price from any source, using last known: $${_solPrice}`);
     }
-  } catch (err) {
-    log.warn('Could not refresh SOL price, using last known:', _solPrice);
-  }
-  return _solPrice;
+    _solInflight = null;
+    return _solPrice;
+  })();
+  return _solInflight;
 }
 
 // ─── Health check ────────────────────────────────────────────────────────────

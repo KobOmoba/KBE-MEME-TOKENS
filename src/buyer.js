@@ -13,6 +13,7 @@
  */
 
 const cfg              = require('../config');
+const { getSolPrice }  = require('./api/rpc');
 const { executeBuySwap, buildPresignedSell } = require('./api/jupiter');
 const { savePaperStats, saveTracked }        = require('./utils/storage');
 const telegram                               = require('./telegram');
@@ -60,7 +61,15 @@ async function executeBuy(tokenData) {
 async function executePaperBuy(tokenData) {
   log.info(`[PAPER] Buying ${tokenData.ticker} @ $${tokenData.entryPrice}`);
 
-  const position = buildPosition(tokenData, true); // PITFALL FIX #1: paperTrade=true explicitly
+  // V4.2 paper realism: fill at a slightly WORSE price than the evaluated one, and pay the buy fee
+  const fillPrice = tokenData.entryPrice * (1 + cfg.paperSlippageBps / 10000);
+  const solPrice  = await getSolPrice();
+  const buyFeeUSD = (cfg.priorityFeeBuy / 1e9) * solPrice;
+  const position = buildPosition(tokenData, true, {   // PITFALL FIX #1: paperTrade=true explicitly
+    entryPrice:  fillPrice,
+    tokenAmount: cfg.tradeSize / fillPrice,
+  });
+  position.paperFeesUSD = buyFeeUSD;
 
   positions.set(tokenData.mint, position);
 
@@ -68,6 +77,7 @@ async function executePaperBuy(tokenData) {
   await savePaperStats('BUY', position, {
     entryPrice: position.entryPrice,
     amountIn:   position.amountUSD,
+    feeUSD:     buyFeeUSD,
   });
   // PITFALL FIX #2: saveTracked called in BUY path
   await saveTracked('BUY', position);
