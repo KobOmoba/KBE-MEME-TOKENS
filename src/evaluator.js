@@ -66,7 +66,7 @@ async function evaluateEntry(entry, curve) {
     entry.enteredWindow = true;
     entry.windowAgeSec = Math.round(ageMs / 1000);
     stats.recordWindowEntry();
-    log.info(`[${tag}] entered mcap window at $${mcap.toFixed(0)} (age ${ageStr})`);
+    log.debug(`[${tag}] entered mcap window at $${mcap.toFixed(0)} (age ${ageStr})`);
   }
 
   // Live money never trades on an unverified feed price; paper may (flagged) so research continues

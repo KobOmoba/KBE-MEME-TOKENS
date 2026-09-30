@@ -9,7 +9,10 @@ const log = require('../utils/logger').forTag('HELIUS');
 
 const BASE = 'https://api.helius.xyz/v0';
 
+const deadPaths = new Set();   // endpoints Helius has retired (HTTP 410/404): stop calling them
+
 async function heliusGet(path, params = {}) {
+  if (deadPaths.has(path)) return null;
   if (!cfg.heliusApiKey) {
     log.warn('HELIUS_API_KEY not set — security enrichment unavailable');
     return null;
@@ -20,6 +23,11 @@ async function heliusGet(path, params = {}) {
       signal: AbortSignal.timeout(6000),
     });
     if (!resp.ok) {
+      if (resp.status === 410 || resp.status === 404) {
+        deadPaths.add(path);
+        log.warn(`Helius ${path} is retired (HTTP ${resp.status}) — disabled for this session; Pump.fun mint/freeze authority assumed revoked`);
+        return null;
+      }
       log.warn(`Helius ${path} returned HTTP ${resp.status}`);
       return null;
     }
