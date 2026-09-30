@@ -58,7 +58,7 @@ function add(det) {
     return false;
   }
   if (entries.size >= cfg.maxWatchlist) {                  // safety valve for RAM / RPC
-    const victim = [...entries.values()].find(e => !e.shadow) || entries.values().next().value;
+    const victim = [...entries.values()].find(e => e.shadow) || entries.values().next().value;   // sacrifice data-only tokens first
     finalize(victim, 'DROP', 'WATCHLIST_FULL', {});
   }
 
@@ -188,7 +188,7 @@ async function runCycle() {
         const reason = e.lastBlocker || 'MCAP_TOO_LOW', detail = e.lastDetail || {};
         stats.recordRejection(reason, { ...detail, peak: e.peakMcap });
         e.rejectionRecorded = true;
-        if (cfg.shadowTrackMinutes > cfg.maxTokenAgeMinutes && e.peakMcap >= cfg.mcapMin) {
+        if (cfg.shadowTrackMinutes > cfg.maxTokenAgeMinutes && e.peakMcap >= Math.max(cfg.mcapMin, cfg.shadowMinPeak)) {
           e.shadow = true;                       // stays subscribed: free price data for the research log
         } else finalize(e, 'EXPIRED', reason, detail);
       }

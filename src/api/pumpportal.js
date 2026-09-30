@@ -25,7 +25,7 @@ let onTrade  = () => {};
 let getWatched = () => [];
 let retry = 0;
 let lastCreateAt = 0;
-let noticeCount = 0, otherCount = 0, subLogCount = 0;   // diagnostics: first few unusual messages only
+let anomalyCount = 0, noticeCount = 0, otherCount = 0, subLogCount = 0;   // diagnostics: first few unusual messages only
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
 const pinned = new Set();            // open positions: never unsubscribed
@@ -41,6 +41,10 @@ function send(obj) {
 function record(m) {
   const mcapSol = Number(m.marketCapSol), vSol = Number(m.vSolInBondingCurve);
   if (!(mcapSol > 0) || !isFinite(mcapSol)) return;
+  if (mcapSol > 600) {                                   // impossible on a bonding curve (graduation ~ 400 SOL)
+    if (anomalyCount++ < 3) log.warn('PP anomaly (mcapSol>600, ignored): ' + JSON.stringify(m).slice(0, 500));
+    return;
+  }
   latest.set(m.mint, { mcapSol, vSol: isFinite(vSol) && vSol > 0 ? vSol : null, ts: Date.now(), stale: false });
 }
 

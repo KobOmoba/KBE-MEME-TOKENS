@@ -1,3 +1,4 @@
+const cfg = require('../../config');
 /**
  * Stats — tracks every token detection and rejection reason.
  * Gives Bayo visibility from Telegram on why tokens are not qualifying.
@@ -18,7 +19,7 @@ const stats = {
     HOLDER_FETCH_ERROR:{ count: 0, label: 'Holder data unavailable',   examples: [] },
     WATCHLIST_FULL:    { count: 0, label: 'Watchlist full (dropped)',  examples: [] },
     MCAP_GATE:         { count: 0, label: 'MCap outside $25k-$35k',    examples: [] },
-    LIQUIDITY_GATE:    { count: 0, label: 'Liquidity below $10k',      examples: [] },
+    LIQUIDITY_GATE:    { count: 0, label: `Liquidity below $${cfg.minLiquidityForBuy}`,      examples: [] },
     RED_FLAG:          { count: 0, label: 'Red flag detected',          examples: [] },
     CONCENTRATION_GATE:{ count: 0, label: 'Wallet concentration >30%', examples: [] },
     SCORE_GATE:        { count: 0, label: 'Score below 65/100',        examples: [] },
