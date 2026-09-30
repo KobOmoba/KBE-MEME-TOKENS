@@ -103,8 +103,11 @@ function startScanner() {
         if (!sig) return;
 
         // Free path: read the mint straight out of the log (no RPC call, no credits).
+        watchlist.counters.createLogs++;
         const ev = decodeCreateEvent(value.logs);
+        if (!ev) watchlist.counters.decodeFail++;
         if (ev) {
+          watchlist.counters.decodeOk++;
           if (!loggedPath.decode) { loggedPath.decode = true; log.info('✅ Detecting new tokens by decoding logs directly (no RPC calls)'); }
           if (watchlist.add({ mint: ev.mint, creator: ev.creator, name: ev.name, symbol: ev.symbol,
                               creationTime: Date.now(), signature: sig, source: 'logs' })) {

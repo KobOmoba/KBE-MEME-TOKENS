@@ -33,6 +33,9 @@ const SEEN_MAX = 5000;
 let running = false;
 let timer = null;
 
+// Heartbeat counters — printed every 60s so the logs show WHICH source is actually delivering
+const counters = { addedPortal: 0, addedLogs: 0, addedTx: 0, createLogs: 0, decodeOk: 0, decodeFail: 0, trades: 0, chainReads: 0, chainFails: 0 };
+
 const _deps = { getBondingCurvesBatch: pumpfun.getBondingCurvesBatch, executeBuy, now: () => Date.now() };   // test hooks
 
 function getPda(mint) {
@@ -46,6 +49,7 @@ function add(det) {
   if (seen.size > SEEN_MAX) [...seen].slice(0, 1000).forEach(m => seen.delete(m));
 
   stats.recordDetection();
+  if (det.source === 'pumpportal') counters.addedPortal++; else if (det.source === 'logs') counters.addedLogs++; else counters.addedTx++;
 
   const ageMs = _deps.now() - det.creationTime;
   if (ageMs / 60000 >= cfg.maxTokenAgeMinutes) {          // arrived too late (Helius/RPC lag)
@@ -105,6 +109,7 @@ async function gatherCurves(list) {
 
   let rpcOk = true;
   if (needRpc.length) {
+    counters.chainReads += needRpc.length;
     try {
       const r = await _deps.getBondingCurvesBatch(needRpc.map(e => ({ mint: e.mint, pda: e.pda })));
       for (const e of needRpc) {
@@ -118,7 +123,7 @@ async function gatherCurves(list) {
         else if (!fc) curves.set(e.mint, rc);                      // 'missing' and no feed data
       }
     } catch (err) {
-      rpcOk = false;
+      rpcOk = false; counters.chainFails++;
       log.warn(`RPC unavailable (${String(err.message).slice(0, 60)}) — running on feed data only`);
     }
   }
@@ -126,6 +131,7 @@ async function gatherCurves(list) {
 }
 
 function onTrade(t) {
+  counters.trades++;
   const e = entries.get(t.mint);
   if (!e || e.shadow) return;
   e.trades++;
@@ -246,7 +252,13 @@ function start() {
     getWatched: () => [...entries.keys()],
   });
   timer = setInterval(() => runCycle().catch(e => log.error(e.message)), cfg.watchIntervalMs);
+  setInterval(() => {
+    const c = counters, all = [...entries.values()];
+    log.info(`💓 watching ${all.filter(e => !e.shadow).length} (+${all.filter(e => e.shadow).length} shadow) | new tokens: portal ${c.addedPortal} logs ${c.addedLogs} tx ${c.addedTx}`
+      + ` | create-logs seen ${c.createLogs} decoded ${c.decodeOk} failed ${c.decodeFail} | feed trades ${c.trades}`
+      + ` | chain reads ${c.chainReads} fails ${c.chainFails} | portal ${feed.isHealthy() ? 'HEALTHY' : feed.isConnected() ? 'CONNECTED-NO-DATA' : 'DOWN'}`);
+  }, 60000);
   log.info(`Watchlist started — cycle every ${cfg.watchIntervalMs / 1000}s, max ${cfg.maxWatchlist} tokens, shadow-track ${cfg.shadowTrackMinutes} min`);
 }
 
-module.exports = { add, start, runCycle, onTrade, _entries: entries, _deps };
+module.exports = { add, start, runCycle, onTrade, counters, _entries: entries, _deps };

@@ -70,13 +70,13 @@ function connect() {
     record(m);                                                    // keep latest price for watched mints
     if (m.txType === 'create') {
       lastCreateAt = Date.now();
-      if (!sampleLogged.create) { sampleLogged.create = true; log.info('PP sample create: ' + JSON.stringify(m).slice(0, 300)); }
+      if (!sampleLogged.create) { sampleLogged.create = true; log.info('PP sample create: ' + JSON.stringify(m).slice(0, 700)); }
       onCreate({
         mint: m.mint, creator: m.traderPublicKey || null, name: m.name, symbol: m.symbol,
         creationTime: Date.now(), source: 'pumpportal',
       });
     } else if (m.txType === 'buy' || m.txType === 'sell') {
-      if (!sampleLogged.trade) { sampleLogged.trade = true; log.info('PP sample trade: ' + JSON.stringify(m).slice(0, 300)); }
+      if (!sampleLogged.trade) { sampleLogged.trade = true; log.info('PP sample trade: ' + JSON.stringify(m).slice(0, 700)); }
       onTrade({ mint: m.mint, trader: m.traderPublicKey, type: m.txType, sol: Number(m.solAmount) || 0 });
     }
   });
