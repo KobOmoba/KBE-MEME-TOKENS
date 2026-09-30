@@ -25,6 +25,7 @@ let onTrade  = () => {};
 let getWatched = () => [];
 let retry = 0;
 let lastCreateAt = 0;
+let noticeCount = 0, otherCount = 0, subLogCount = 0;   // diagnostics: first few unusual messages only
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
 const pinned = new Set();            // open positions: never unsubscribed
@@ -65,7 +66,12 @@ function connect() {
   ws.on('message', (raw) => {
     let m;
     try { m = JSON.parse(raw.toString()); } catch { return; }
-    if (!m || m.message || m.errors || !m.mint) return;          // acks / errors
+    if (!m) return;
+    if (m.message || m.errors) {                                  // acks / errors from PumpPortal
+      if (noticeCount++ < 8) log.info('PP notice: ' + JSON.stringify(m).slice(0, 300));
+      return;
+    }
+    if (!m.mint) return;
 
     record(m);                                                    // keep latest price for watched mints
     if (m.txType === 'create') {
@@ -78,6 +84,8 @@ function connect() {
     } else if (m.txType === 'buy' || m.txType === 'sell') {
       if (!sampleLogged.trade) { sampleLogged.trade = true; log.info('PP sample trade: ' + JSON.stringify(m).slice(0, 700)); }
       onTrade({ mint: m.mint, trader: m.traderPublicKey, type: m.txType, sol: Number(m.solAmount) || 0 });
+    } else if (otherCount++ < 5) {
+      log.info('PP other message: ' + JSON.stringify(m).slice(0, 400));
     }
   });
 
@@ -96,6 +104,7 @@ function subscribe(mint) {
   if (!connected) return false;
   if (subscribed.has(mint)) return true;
   send({ method: 'subscribeTokenTrade', keys: [mint] });
+  if (subLogCount++ < 3) log.info('PP → subscribeTokenTrade ' + mint.slice(0, 8) + '...');
   subscribed.add(mint);
   return true;
 }
