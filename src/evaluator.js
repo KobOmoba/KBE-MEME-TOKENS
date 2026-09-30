@@ -69,6 +69,11 @@ async function evaluateEntry(entry, curve) {
     log.info(`[${tag}] entered mcap window at $${mcap.toFixed(0)} (age ${ageStr})`);
   }
 
+  // Live money never trades on an unverified feed price; paper may (flagged) so research continues
+  // while the RPC provider is rate limited.
+  const feedPriced = curve.source === 'feed';
+  if (feedPriced && !cfg.paperTrade) return WAIT('RPC_UNVERIFIED', { mcap });
+
   // ── GATE 3: LIQUIDITY ─────────────────────────────────────────────────────
   const liq = curve.liquidityUSD;
   if (!liq || liq < cfg.minLiquidityForBuy) return WAIT('LIQUIDITY_GATE', { liquidity: liq });
@@ -96,13 +101,19 @@ async function evaluateEntry(entry, curve) {
   // ── GATE 5: WALLET CONCENTRATION ──────────────────────────────────────────
   if (!entry.holders || now - entry.holdersAt > HOLDER_TTL) {
     const h = await getTopHolderConcentration(mint, entry.creator);
-    if (!h.ok) return WAIT('HOLDER_FETCH_ERROR', {});
-    entry.holders = h; entry.holdersAt = now;
+    if (h.ok) { entry.holders = h; entry.holdersAt = now; }
+    else if (entry.holders) { entry.holdersAt = now; }                       // keep last known
+    else if (cfg.paperTrade && cfg.allowUnverifiedInPaper) {                 // RPC down: paper only
+      entry.holders = { ok: false, top10Pct: null, devHoldingPct: null }; entry.holdersAt = now;
+    } else return WAIT('HOLDER_FETCH_ERROR', {});
   }
   const { top10Pct, devHoldingPct } = entry.holders;
+  const holdersKnown = top10Pct != null;
   const devTxns = feed ? entry.devTxns : null;
 
-  if (top10Pct > cfg.maxWalletConcentration) {
+  if (!holdersKnown) {
+    greenFlags.push('⚠️ Holders unverified — RPC unavailable (paper only)');
+  } else if (top10Pct > cfg.maxWalletConcentration) {
     // Override needs BOTH: dev < 10% supply AND zero dev txns. Unknown = cannot verify = no override.
     const overrideA = devHoldingPct !== null && devHoldingPct < cfg.devMaxHoldingPct;
     const overrideB = devTxns === 0;
@@ -142,6 +153,7 @@ async function evaluateEntry(entry, curve) {
       Object.entries(breakdown).map(([k, v]) => `${k}=${v.score}`).join(' '));
     return WAIT('SCORE_GATE', { score, breakdown, scaled });
   }
+  if (feedPriced) greenFlags.push('⚠️ Price from PumpPortal feed (chain check unavailable)');
   if (scaled) greenFlags.push('⚠️ Score scaled — some inputs unavailable');
   if (!cfg.scoreGateEnabled) greenFlags.push(`Score ${score}/100 (advisory — gate OFF)`);
   if (entry.wasAbove) greenFlags.push(`⚠️ Dip re-entry — token had peaked at $${Math.round(entry.peakMcap).toLocaleString()}`);
@@ -158,7 +170,7 @@ async function evaluateEntry(entry, curve) {
     transactionCount: txnCount ?? 0,
     devHoldingPct: devHoldingPct ?? 0,
     devTxns: devTxns ?? 0,
-    top10Pct, greenFlags, redFlags,
+    top10Pct: top10Pct ?? 0, greenFlags, redFlags,
     hasTwitter: !!meta.hasTwitter, hasTelegram: !!meta.hasTelegram, hasWebsite: !!meta.hasWebsite,
     entryMode: entry.wasAbove ? 'dip' : 'climb',
     peakMcapAtEntry: entry.peakMcap,

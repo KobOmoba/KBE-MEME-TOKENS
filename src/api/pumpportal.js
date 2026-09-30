@@ -27,9 +27,20 @@ let retry = 0;
 let lastCreateAt = 0;
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
+const pinned = new Set();            // open positions: never unsubscribed
+const latest = new Map();            // mint -> { mcapSol, vSol, ts, stale }  (free price source)
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// Latest bonding-curve state per mint straight from trade events (no RPC needed).
+// Field names (marketCapSol, vSolInBondingCurve) are from memory of the PumpPortal docs: the
+// watchlist cross-checks near-window tokens against on-chain data and warns on mismatch.
+function record(m) {
+  const mcapSol = Number(m.marketCapSol), vSol = Number(m.vSolInBondingCurve);
+  if (!(mcapSol > 0) || !isFinite(mcapSol)) return;
+  latest.set(m.mint, { mcapSol, vSol: isFinite(vSol) && vSol > 0 ? vSol : null, ts: Date.now(), stale: false });
 }
 
 function start(handlers) {
@@ -47,7 +58,7 @@ function connect() {
     connected = true; retry = 0; subscribed.clear();
     log.info('PumpPortal connected');
     send({ method: 'subscribeNewToken' });
-    const mints = getWatched();
+    const mints = [...new Set([...getWatched(), ...pinned])];
     if (mints.length) { send({ method: 'subscribeTokenTrade', keys: mints }); mints.forEach(m => subscribed.add(m)); }
   });
 
@@ -56,6 +67,7 @@ function connect() {
     try { m = JSON.parse(raw.toString()); } catch { return; }
     if (!m || m.message || m.errors || !m.mint) return;          // acks / errors
 
+    record(m);                                                    // keep latest price for watched mints
     if (m.txType === 'create') {
       lastCreateAt = Date.now();
       if (!sampleLogged.create) { sampleLogged.create = true; log.info('PP sample create: ' + JSON.stringify(m).slice(0, 300)); }
@@ -72,6 +84,7 @@ function connect() {
   ws.on('error', (e) => log.warn('PumpPortal error: ' + e.message));
   ws.on('close', () => {
     connected = false; subscribed.clear();
+    latest.forEach(v => { v.stale = true; });                    // gap in the feed: prices unreliable until next event
     const delay = Math.min(3000 * ++retry, 30000);
     log.warn(`PumpPortal closed — reconnect in ${delay / 1000}s`);
     setTimeout(connect, delay);
@@ -87,13 +100,18 @@ function subscribe(mint) {
   return true;
 }
 function unsubscribe(mint) {
+  if (pinned.has(mint)) return;
+  latest.delete(mint);
   if (!connected || !subscribed.has(mint)) return;
   send({ method: 'unsubscribeTokenTrade', keys: [mint] });
   subscribed.delete(mint);
 }
+/** Keep a mint subscribed forever (open position) and re-subscribe after every reconnect. */
+function pin(mint) { pinned.add(mint); subscribe(mint); }
+const getLatest = (mint) => latest.get(mint) || null;
 const isConnected = () => connected;
 // Healthy = connected AND a create event arrived in the last 60s. If the message shape ever
 // differs from what we expect, this goes false and Helius log-detection takes over again.
 const isHealthy = () => connected && (Date.now() - lastCreateAt) < 60000;
 
-module.exports = { start, subscribe, unsubscribe, isConnected, isHealthy };
+module.exports = { start, subscribe, unsubscribe, pin, getLatest, isConnected, isHealthy };

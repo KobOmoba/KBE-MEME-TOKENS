@@ -20,6 +20,7 @@ const path = require('path');
 const cfg = require('../config');
 const { PublicKey } = require('@solana/web3.js');
 const pumpfun = require('./api/pumpfun');
+const rpc = require('./api/rpc');
 const { evaluateEntry } = require('./evaluator');
 const { executeBuy } = require('./buyer');
 const feed = require('./api/pumpportal');
@@ -71,6 +72,57 @@ function add(det) {
   entry.feed = feed.subscribe(det.mint);
   entries.set(det.mint, entry);
   return true;
+}
+
+/**
+ * V4.2d: PumpPortal is the PRIMARY data source, Helius RPC is the verifier / fallback.
+ *  - token with fresh feed data far from the window  -> no RPC call at all
+ *  - token with feed data near the window            -> ONE batched on-chain read to verify
+ *  - token with no usable feed data                  -> batched on-chain read (fallback)
+ *  - RPC down / rate limited                         -> keep running on feed data only
+ */
+async function gatherCurves(list) {
+  const solPrice = await rpc.getSolPrice();
+  const curves = new Map(), needRpc = [];
+  const feedUp = feed.isConnected();
+
+  for (const e of list) {
+    const fl = feed.getLatest(e.mint);
+    if (fl && !fl.stale && feedUp) {
+      const mcapUSD = fl.mcapSol * solPrice;
+      curves.set(e.mint, {
+        state: 'ok', source: 'feed', marketCapUSD: mcapUSD, priceUSD: mcapUSD / 1e9,
+        liquidityUSD: fl.vSol != null ? Math.max(0, fl.vSol - 30) * 2 * solPrice : 0,   // vSol starts at 30
+      });
+      if (!e.shadow && mcapUSD >= cfg.mcapMin * 0.9 && mcapUSD <= cfg.mcapMax * 1.1) needRpc.push(e);
+    } else if (!e.shadow) {
+      needRpc.push(e);                                             // no usable feed data => chain fallback
+    } else if (Date.now() - (e.lastRpcAt || 0) > 30000) {          // shadow: data-only, throttled
+      e.lastRpcAt = Date.now();
+      needRpc.push(e);
+    }
+  }
+
+  let rpcOk = true;
+  if (needRpc.length) {
+    try {
+      const r = await _deps.getBondingCurvesBatch(needRpc.map(e => ({ mint: e.mint, pda: e.pda })));
+      for (const e of needRpc) {
+        const rc = r.get(e.mint), fc = curves.get(e.mint);
+        if (rc && rc.state === 'ok') {
+          if (fc && Math.abs(rc.marketCapUSD - fc.marketCapUSD) / rc.marketCapUSD > 0.15) {
+            log.warn(`FEED MISMATCH ${e.mint.slice(0, 8)}: feed $${Math.round(fc.marketCapUSD)} vs chain $${Math.round(rc.marketCapUSD)} — trusting chain`);
+          }
+          curves.set(e.mint, rc);                                  // on-chain is authoritative
+        } else if (rc && rc.state === 'graduated') curves.set(e.mint, rc);
+        else if (!fc) curves.set(e.mint, rc);                      // 'missing' and no feed data
+      }
+    } catch (err) {
+      rpcOk = false;
+      log.warn(`RPC unavailable (${String(err.message).slice(0, 60)}) — running on feed data only`);
+    }
+  }
+  return { curves, rpcOk };
 }
 
 function onTrade(t) {
@@ -127,7 +179,7 @@ async function runCycle() {
         stats.recordRejection(reason, { ...detail, peak: e.peakMcap });
         e.rejectionRecorded = true;
         if (cfg.shadowTrackMinutes > cfg.maxTokenAgeMinutes && e.peakMcap >= cfg.mcapMin) {
-          e.shadow = true; feed.unsubscribe(e.mint);
+          e.shadow = true;                       // stays subscribed: free price data for the research log
         } else finalize(e, 'EXPIRED', reason, detail);
       }
     }
@@ -135,7 +187,7 @@ async function runCycle() {
     if (!entries.size) return;
 
     // 2. one batched RPC call for every watched token
-    const curves = await _deps.getBondingCurvesBatch([...entries.values()].map(e => ({ mint: e.mint, pda: e.pda })));
+    const { curves } = await gatherCurves([...entries.values()]);
 
     // 3. evaluate
     for (const e of [...entries.values()]) {
@@ -170,7 +222,9 @@ async function runCycle() {
       if (res.status === 'WAIT') { e.lastBlocker = res.reason; e.lastDetail = res.detail; }
       else if (res.status === 'DROP') finalize(e, 'DROP', res.reason, res.detail || {});
       else if (res.status === 'PASS') {
-        finalize(e, 'PASS', 'BOUGHT', {});
+        feed.pin(e.mint);                       // keep the free price feed alive while the position is open
+        entries.delete(e.mint);                 // (no unsubscribe: pinned)
+        writeWatchLog(e, 'PASS', 'BOUGHT');
         stats.recordPass();
         // fire-and-forget: a slow buy must never stall the watch cycle
         Promise.resolve(_deps.executeBuy(res.data)).catch(err =>
@@ -189,7 +243,7 @@ function start() {
   feed.start({
     onCreate: (d) => add(d),
     onTrade,
-    getWatched: () => [...entries.values()].filter(e => !e.shadow).map(e => e.mint),
+    getWatched: () => [...entries.keys()],
   });
   timer = setInterval(() => runCycle().catch(e => log.error(e.message)), cfg.watchIntervalMs);
   log.info(`Watchlist started — cycle every ${cfg.watchIntervalMs / 1000}s, max ${cfg.maxWatchlist} tokens, shadow-track ${cfg.shadowTrackMinutes} min`);

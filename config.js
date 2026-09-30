@@ -49,7 +49,8 @@ module.exports = {
   maxHoldMinutes:       15,    // time exit: if no 2x in 15 min → exit 100%
 
   // ─── WATCHLIST (V4.2) ───────────────────────────────────────────────────────
-  watchIntervalMs:   10000,    // re-check every watched token this often (one batched RPC call = 1 credit; 10s ~ 260k/month)
+  watchIntervalMs:   5000,     // re-check every watched token this often (feed-priced: costs no RPC credits)
+  allowUnverifiedInPaper: true, // paper may trade when RPC is down (holders unverified, flagged). Live never does.
   maxWatchlist:      400,
   shadowTrackMinutes: 30,      // keep following tokens that reached $25k after the 5-min buy cutoff (data only, never bought)      // safety cap for RAM / RPC on the 956MB server
   pumpPortalEnabled: process.env.PUMPPORTAL !== 'off',   // trade feed + backup detection
@@ -72,7 +73,10 @@ module.exports = {
   // ─── NETWORK ────────────────────────────────────────────────────────────────
   // Never use public RPC. Must be Helius or Triton private endpoint.
   rpcEndpoint:      process.env.RPC_ENDPOINT   || '',
-  rpcWsEndpoint:    process.env.RPC_WS_ENDPOINT || '',
+  rpcWsEndpoint:    process.env.RPC_WS_ENDPOINT || '',   // Helius WS — LAST resort for log detection
+  // Tier 2 log source (onLogs / logsSubscribe). Non-Helius by default; override in .env with any
+  // Solana WebSocket you trust (a free-tier provider is more reliable than the public endpoint).
+  logsWsEndpoint:   process.env.LOGS_WS_ENDPOINT || 'wss://api.mainnet-beta.solana.com',
   jitoEndpoint:     process.env.JITO_ENDPOINT  || 'https://mainnet.block-engine.jito.labs.io/api/v1/bundles',
   heliusApiKey:     process.env.HELIUS_API_KEY  || '',
   jupiterPriceUrl:  'https://price.jup.ag/v6/price',

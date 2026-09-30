@@ -20,6 +20,8 @@
 
 const cfg                    = require('../config');
 const { getBondingCurveData } = require('./api/pumpfun');
+const rpc                     = require('./api/rpc');
+const feed                    = require('./api/pumpportal');
 const { buildAllPresignedSells } = require('./buyer');
 const { executeSell }        = require('./seller');
 const { savePositions }      = require('./utils/storage');
@@ -30,6 +32,7 @@ let positions = new Map();
 
 function init(posMap) {
   positions = posMap;
+  for (const mint of positions.keys()) feed.pin(mint);   // crash recovery: resume free price feed
 }
 
 function getPositions() {
@@ -69,14 +72,23 @@ async function checkPosition(pos) {
   let currentPrice = pos.currentPrice || pos.entryPrice;
 
   // Get live price from bonding curve (real-time on-chain data)
-  try {
-    const curve = await getBondingCurveData(pos.mint);
-    if (curve) {
-      currentPrice     = curve.priceUSD;
-      pos.currentPrice = currentPrice;
+  // V4.2d: PumpPortal feed first (free, real-time); on-chain read only if the feed has a gap.
+  let priced = false;
+  const fl = feed.getLatest(pos.mint);
+  if (fl && !fl.stale && feed.isConnected()) {
+    currentPrice = fl.mcapSol * (await rpc.getSolPrice()) / 1e9;
+    pos.currentPrice = currentPrice; priced = true;
+  }
+  if (!priced) {
+    try {
+      const curve = await getBondingCurveData(pos.mint);
+      if (curve) {
+        currentPrice     = curve.priceUSD;
+        pos.currentPrice = currentPrice;
+      }
+    } catch (err) {
+      log.warn(`[${pos.ticker}] Price fetch failed — using last known $${currentPrice}`);
     }
-  } catch (err) {
-    log.warn(`[${pos.ticker}] Price fetch failed — using last known $${currentPrice}`);
   }
 
   const currentMultiple = currentPrice / pos.entryPrice;

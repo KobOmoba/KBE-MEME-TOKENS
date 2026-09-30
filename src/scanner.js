@@ -16,6 +16,7 @@ const cfg       = require('../config');
 const { extractMintFromTx } = require('./api/pumpfun');
 const watchlist             = require('./watchlist');
 const feed                  = require('./api/pumpportal');
+const { decodeCreateEvent } = require('./api/pumpEvent');
 const log                   = require('./utils/logger').forTag('SCANNER');
 
 const PUMP_FUN_PROGRAM  = '6EF8rrectrRdC4KjqW7GqK9Wz9hEndkbskZaZKzhW9Ep';
@@ -31,16 +32,30 @@ let subId        = null;
 let pingInterval = null;
 let reconnecting = false;
 
+// Detection source order:  1) PumpPortal  2) logsSubscribe on a NON-Helius endpoint  3) Helius WS
+let endpointIdx     = 0;
+let badSessions     = 0;
+let sessionSubbed   = false;
+let fallbackSince   = 0;
+let loggedPath      = { decode: false, txFallback: false };
+
+function endpoints() {
+  return [...new Set([cfg.logsWsEndpoint, cfg.rpcWsEndpoint].filter(Boolean))];
+}
+function hostOf(url) { try { return new URL(url).host; } catch { return 'ws'; }   // never log the API key
+}
+
 // ─── Start WebSocket scanner ──────────────────────────────────────────────────
 
 function startScanner() {
-  if (!cfg.rpcWsEndpoint) {
-    throw new Error('RPC_WS_ENDPOINT not set in .env');
-  }
+  const list = endpoints();
+  if (!list.length) throw new Error('No WebSocket endpoint configured (LOGS_WS_ENDPOINT / RPC_WS_ENDPOINT)');
+  const url = list[endpointIdx % list.length];
+  sessionSubbed = false;
 
-  log.info(`Connecting to WebSocket: ${cfg.rpcWsEndpoint.slice(0, 50)}...`);
+  log.info(`Connecting log subscription: ${hostOf(url)} (source ${endpointIdx % list.length + 1}/${list.length})`);
 
-  ws = new WebSocket(cfg.rpcWsEndpoint);
+  ws = new WebSocket(url);
 
   ws.on('open', () => {
     log.info('WebSocket connected — subscribing to Pump.fun logs...');
@@ -72,6 +87,7 @@ function startScanner() {
       // Subscription confirmation
       if (msg.id === 1 && msg.result !== undefined) {
         subId = msg.result;
+        sessionSubbed = true; badSessions = 0;
         log.info(`✅ Pump.fun WebSocket subscription active (subId: ${subId})`);
         return;
       }
@@ -86,9 +102,20 @@ function startScanner() {
         const sig = value.signature;
         if (!sig) return;
 
-        // V4.2 credit saver: every Helius detection costs a getTransaction (1+ credits). While
-        // PumpPortal is delivering new tokens for free, skip this path. It is the FALLBACK.
+        // Free path: read the mint straight out of the log (no RPC call, no credits).
+        const ev = decodeCreateEvent(value.logs);
+        if (ev) {
+          if (!loggedPath.decode) { loggedPath.decode = true; log.info('✅ Detecting new tokens by decoding logs directly (no RPC calls)'); }
+          if (watchlist.add({ mint: ev.mint, creator: ev.creator, name: ev.name, symbol: ev.symbol,
+                              creationTime: Date.now(), signature: sig, source: 'logs' })) {
+            log.info(`New token (logs): ${ev.mint.slice(0, 8)}... $${ev.symbol} | creator ${ev.creator.slice(0, 8)} | watching`);
+          }
+          return;
+        }
+
+        // Costly path (getTransaction = RPC credits). Skip while PumpPortal is delivering.
         if (feed.isHealthy()) return;
+        if (!loggedPath.txFallback) { loggedPath.txFallback = true; log.warn('Log decode unavailable — using getTransaction fallback (uses RPC credits)'); }
 
         // Dedup
         if (seenSignatures.has(sig)) return;
@@ -177,6 +204,17 @@ async function maintainScanner() {
       await sleep(delay);
     }
 
+    // Session never got a live subscription => count it; after 3 in a row move to the next source.
+    if (!sessionSubbed) badSessions++;
+    const n = endpoints().length;
+    if (badSessions >= 3 && n > 1) {
+      endpointIdx = (endpointIdx + 1) % n; badSessions = 0;
+      if (endpointIdx !== 0) fallbackSince = Date.now();
+      log.warn(`Log source failing — switching to ${hostOf(endpoints()[endpointIdx])}`);
+    } else if (endpointIdx !== 0 && Date.now() - fallbackSince > 10 * 60000) {
+      endpointIdx = 0; badSessions = 0;                       // try the preferred (non-Helius) source again
+      log.info('Retrying preferred log source');
+    }
     const delay = Math.min(3000 * (failCount + 1), 30000);
     log.warn(`Scanner disconnected — reconnecting in ${delay/1000}s...`);
     await sleep(delay);

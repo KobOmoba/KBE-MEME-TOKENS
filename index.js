@@ -68,10 +68,16 @@ async function main() {
   const health = await checkHealth();
   if (!health.ok) {
     log.error('RPC health check FAILED:', health.error);
-    log.error('Waiting 60s before exit so PM2 does not spam a rate-limited endpoint...');
-    await new Promise(r => setTimeout(r, 60000));
-    process.exit(1);
-  }
+    if (cfg.pumpPortalEnabled) {
+      // Helius is the BACKUP source. Keep running on the PumpPortal feed (watch log + paper trading).
+      log.warn('⚠️  RPC DEGRADED — continuing on PumpPortal feed only. Holder/chain checks unavailable.');
+      await telegram.sendAlert('RPC DEGRADED', `Helius unavailable (${String(health.error).slice(0, 80)}). Running on PumpPortal feed only.`).catch(() => {});
+    } else {
+      log.error('Waiting 60s before exit so PM2 does not spam a rate-limited endpoint...');
+      await new Promise(r => setTimeout(r, 60000));
+      process.exit(1);
+    }
+  } else
   log.info(`RPC OK — slot ${health.slot}, epoch ${health.epoch}`);
 
   // Load positions from disk (crash recovery)

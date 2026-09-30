@@ -18,6 +18,7 @@ const feed = require('../src/api/pumpportal');
 let feedUp = true;
 feed.subscribe = () => feedUp; feed.unsubscribe = () => {};
 
+require('../src/api/rpc').getSolPrice = async () => 150;
 const wl = require('../src/watchlist');
 const stats = require('../src/utils/stats');
 
@@ -131,7 +132,7 @@ test('shadow tracking: promising token is followed past 5 min (never bought), la
   e.creationTime = Date.now() - 5.5 * 60000; mcaps[m] = 30000; await wl.runCycle();   // 5.5 min: past buy cutoff
   assert.equal(e.shadow, true); assert.equal(wl._entries.has(m), true);
   assert.equal(bought.length, 0); assert.ok(e.lateWindowAgeSec >= 330, 'late in-window sighting recorded');
-  mcaps[m] = 90000; await wl.runCycle();
+  mcaps[m] = 90000; e.lastRpcAt = 0; await wl.runCycle();                           // (30s throttle elapsed)
   e.creationTime = Date.now() - 31 * 60000; await wl.runCycle();                      // shadow period over
   assert.equal(wl._entries.has(m), false);
   const line = fs.readFileSync(cfg.watchLogFile, 'utf8').trim().split('\n').map(JSON.parse).find(x => x.mint === m);
@@ -163,4 +164,67 @@ test('moon bag: 12% trailing stop from ATH, only after BOTH tiers', async () => 
 test('PumpPortal is not "healthy" unless connected and delivering (Helius fallback stays on)', () => {
   const real = require('../src/api/pumpportal');
   assert.equal(real.isHealthy(), false);
+});
+
+// ── V4.2d: PumpPortal primary, RPC verifier/fallback ──────────────────────────
+const feedPrice = {};                                   // mint -> { mcapSol, vSol }
+const realGetLatest = feed.getLatest, realIsConnected = feed.isConnected;
+const useFeed = () => { feed.getLatest = (m) => feedPrice[m] ? { ...feedPrice[m], stale: false } : null; feed.isConnected = () => true; };
+const unuseFeed = () => { feed.getLatest = realGetLatest; feed.isConnected = realIsConnected; };
+const sol = (usd) => usd / 150;                         // test SOL price is $150
+
+test('feed-priced token far from the window costs ZERO rpc calls', async () => {
+  wl._entries.clear(); useFeed(); let rpcCalls = 0; const orig = wl._deps.getBondingCurvesBatch;
+  wl._deps.getBondingCurvesBatch = async (i) => { rpcCalls += i.length; return orig(i); };
+  const m = spawn(); feedPrice[m] = { mcapSol: sol(6000), vSol: 32 };
+  await wl.runCycle();
+  assert.equal(rpcCalls, 0, 'no chain read needed while token is at $6k');
+  wl._deps.getBondingCurvesBatch = orig; wl._entries.delete(m); unuseFeed();
+});
+
+test('near the window the chain is consulted and OVERRIDES a wrong feed value', async () => {
+  wl._entries.clear(); useFeed(); bought.length = 0; const seenBy = [];
+  const m = spawn(); buys(m);
+  feedPrice[m] = { mcapSol: sol(30000), vSol: 80 };     // feed says $30k
+  mcaps[m] = 60000;                                     // chain says $60k (feed is wrong)
+  await wl.runCycle();
+  assert.equal(bought.length, 0, 'chain value $60k is above the window => no buy');
+  assert.equal(wl._entries.get(m).lastBlocker, 'MCAP_TOO_HIGH');
+  wl._entries.delete(m); unuseFeed();
+});
+
+test('RPC down: paper keeps trading on the feed (holders flagged unverified); live refuses', async () => {
+  wl._entries.clear(); useFeed(); bought.length = 0;
+  const orig = wl._deps.getBondingCurvesBatch; wl._deps.getBondingCurvesBatch = async () => { throw new Error('429 Too Many Requests'); };
+  const prevHolders = holders; holders = { ok: false };
+  const m = spawn(); buys(m); feedPrice[m] = { mcapSol: sol(28000), vSol: 80 };
+  await wl.runCycle();
+  assert.equal(bought.length, 1, 'paper buys on feed data');
+  assert.ok(bought[0].greenFlags.some(f => /unverified/i.test(f)), 'flagged as unverified');
+  assert.ok(bought[0].greenFlags.some(f => /feed/i.test(f)));
+
+  bought.length = 0; cfg.paperTrade = false;            // LIVE mode: never on unverified data
+  const m2 = spawn(); buys(m2); feedPrice[m2] = { mcapSol: sol(28000), vSol: 80 };
+  await wl.runCycle();
+  assert.equal(bought.length, 0, 'live must not trade without on-chain verification');
+  assert.equal(wl._entries.get(m2).lastBlocker, 'RPC_UNVERIFIED');
+  cfg.paperTrade = true; wl._entries.delete(m2);
+  wl._deps.getBondingCurvesBatch = orig; holders = prevHolders; unuseFeed();
+});
+
+test('log decoder: reads mint/creator from a Pump.fun CreateEvent and refuses anything inconsistent', () => {
+  const { decodeCreateEvent, CREATE_EVENT_DISC } = require('../src/api/pumpEvent');
+  const { Keypair, PublicKey } = require('@solana/web3.js');
+  const str = (t) => { const b = Buffer.from(t); const l = Buffer.alloc(4); l.writeUInt32LE(b.length); return Buffer.concat([l, b]); };
+  const mintK = Keypair.generate().publicKey, user = Keypair.generate().publicKey;
+  const curve = PublicKey.findProgramAddressSync([Buffer.from('bonding-curve'), mintK.toBytes()], pf.PUMP_FUN_PROGRAM)[0];
+  const ev = (c, disc = CREATE_EVENT_DISC) => 'Program data: ' + Buffer.concat([disc, str('Test'), str('TST'), str('https://x/y'),
+    mintK.toBytes(), c.toBytes(), user.toBytes(), Buffer.alloc(40)]).toString('base64');
+  const logs = ['Program log: Instruction: Create', ev(curve)];
+  const d = decodeCreateEvent(logs);
+  assert.equal(d.mint, mintK.toBase58()); assert.equal(d.creator, user.toBase58()); assert.equal(d.symbol, 'TST');
+  assert.equal(decodeCreateEvent(['Program data: ' + ev(curve).slice(14).slice(0, 30)]), null, 'truncated => null');
+  assert.equal(decodeCreateEvent([ev(Keypair.generate().publicKey)]), null, 'curve != PDA(mint) => layout drift => refuse');
+  assert.equal(decodeCreateEvent([ev(curve, Buffer.alloc(8))]), null, 'wrong discriminator => null');
+  assert.equal(decodeCreateEvent(undefined), null);
 });
