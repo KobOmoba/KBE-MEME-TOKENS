@@ -19,9 +19,14 @@ module.exports = {
   // ─── ENTRY FILTERS ──────────────────────────────────────────────────────────
   // Spec §2 — all non-negotiable
   maxTokenAgeMinutes:      5,       // V3 §2.1 — tokens at/older than 5 min: auto-reject
-  mcapMin:                 25000,   // V3 §2.2 — $25k min (was $50k in V1)
+  // V4.2 (Bayo decision): NO entry floor. Buy as early as the safety gates allow. To restore the
+  // old $25k floor put MCAP_MIN=25000 and MIN_LIQUIDITY=10000 in .env.
+  mcapMin:                 process.env.MCAP_MIN !== undefined ? parseFloat(process.env.MCAP_MIN) : 0,
   mcapMax:                 35000,   // V3 §2.2 — $35k max (was $5M in V1)
-  minLiquidityForBuy:      10000,   // V3 §2.3 — $10k min liquidity
+  // Bonding-curve liquidity at launch is only ~$500-1,500, so a $10k floor made early entry impossible.
+  // A $2 trade moves such a curve by ~1-2%, so $500 is enough for the trade size in use.
+  minLiquidityForBuy:      process.env.MIN_LIQUIDITY !== undefined ? parseFloat(process.env.MIN_LIQUIDITY) : 500,
+  maxOpenPositions:        parseInt(process.env.MAX_OPEN || '10', 10),   // stops a flood of paper buys
   minScore:                65,      // V3 §2.6 — only enforced when scoreGateEnabled
   // V4.2 (Bayo decision): score is ADVISORY by default. It is still computed and stored on every
   // paper trade so win-rate by score can be measured. Turn back on with SCORE_GATE=on in .env.
@@ -108,3 +113,7 @@ module.exports = {
   paperStatsFile:   './data/paper_stats.json',
   trackedFile:      './data/tracked.json',
 };
+
+// Human label for messages: "$25k–$35k" or "under $35k"
+const _k = (n) => n >= 1000 ? `$${n / 1000}k` : `$${n}`;
+module.exports.windowLabel = module.exports.mcapMin > 0 ? `${_k(module.exports.mcapMin)}–${_k(module.exports.mcapMax)}` : `under ${_k(module.exports.mcapMax)}`;

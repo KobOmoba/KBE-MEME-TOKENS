@@ -5,6 +5,8 @@ const os = require('os'), path = require('path'), fs = require('fs');
 
 const cfg = require('../config');
 cfg.watchLogFile = path.join(os.tmpdir(), `watch_${Date.now()}.jsonl`);
+cfg.mcapMin = 25000; cfg.minLiquidityForBuy = 10000;      // tests 1-16 exercise the classic $25k-$35k window
+cfg.maxOpenPositions = 1000;
 
 // ── stub network-touching modules BEFORE loading evaluator/watchlist ──
 const pf = require('../src/api/pumpfun');
@@ -107,7 +109,7 @@ test('scorer: perfect inputs can now clear 65; zeros are not treated as worst-ca
 
 test('funnel stats report window entries and peak percentiles', () => {
   const s = stats.getSummary();
-  assert.match(s.extraLines, /Entered \$25k-\$35k window: \d+/);
+  assert.match(s.extraLines, /Reached buy range: \d+/);
   assert.match(s.extraLines, /median/);
 });
 
@@ -227,4 +229,18 @@ test('log decoder: reads mint/creator from a Pump.fun CreateEvent and refuses an
   assert.equal(decodeCreateEvent([ev(Keypair.generate().publicKey)]), null, 'curve != PDA(mint) => layout drift => refuse');
   assert.equal(decodeCreateEvent([ev(curve, Buffer.alloc(8))]), null, 'wrong discriminator => null');
   assert.equal(decodeCreateEvent(undefined), null);
+});
+
+test('EARLY MODE: no mcap floor => buys at ~$5k once safety gates pass; position cap holds the rest', async () => {
+  wl._entries.clear(); bought.length = 0;
+  cfg.mcapMin = 0; cfg.minLiquidityForBuy = 500;
+  const m = spawn(); buys(m); mcaps[m] = 5000; await wl.runCycle();
+  assert.equal(bought.length, 1, 'bought at $5k'); assert.ok(bought[0].entryMcap <= 5000);
+
+  bought.length = 0; const origCount = wl._deps.openCount; wl._deps.openCount = () => 10; cfg.maxOpenPositions = 10;
+  const m2 = spawn(); buys(m2); mcaps[m2] = 5000; await wl.runCycle();
+  assert.equal(bought.length, 0, 'cap reached => no buy'); assert.equal(wl._entries.get(m2).lastBlocker, 'POSITION_CAP');
+  wl._deps.openCount = () => 3; await wl.runCycle();
+  assert.equal(bought.length, 1, 'slot frees => buys'); 
+  wl._deps.openCount = origCount; cfg.maxOpenPositions = 1000; cfg.mcapMin = 25000; cfg.minLiquidityForBuy = 10000;
 });

@@ -36,7 +36,8 @@ let timer = null;
 // Heartbeat counters — printed every 60s so the logs show WHICH source is actually delivering
 const counters = { addedPortal: 0, addedLogs: 0, addedTx: 0, createLogs: 0, decodeOk: 0, decodeFail: 0, trades: 0, chainReads: 0, chainFails: 0 };
 
-const _deps = { getBondingCurvesBatch: pumpfun.getBondingCurvesBatch, executeBuy, now: () => Date.now() };   // test hooks
+let pendingBuys = 0;
+const _deps = { getBondingCurvesBatch: pumpfun.getBondingCurvesBatch, executeBuy, openCount: () => require('./buyer').openCount(), now: () => Date.now() };   // test hooks
 
 function getPda(mint) {
   return PublicKey.findProgramAddressSync(
@@ -228,13 +229,18 @@ async function runCycle() {
       if (res.status === 'WAIT') { e.lastBlocker = res.reason; e.lastDetail = res.detail; }
       else if (res.status === 'DROP') finalize(e, 'DROP', res.reason, res.detail || {});
       else if (res.status === 'PASS') {
+        if (_deps.openCount() + pendingBuys >= cfg.maxOpenPositions) {     // all slots busy: stay on the list
+          e.lastBlocker = 'POSITION_CAP'; e.lastDetail = {}; continue;
+        }
+        pendingBuys++;
         feed.pin(e.mint);                       // keep the free price feed alive while the position is open
         entries.delete(e.mint);                 // (no unsubscribe: pinned)
         writeWatchLog(e, 'PASS', 'BOUGHT');
         stats.recordPass();
         // fire-and-forget: a slow buy must never stall the watch cycle
-        Promise.resolve(_deps.executeBuy(res.data)).catch(err =>
-          log.error(`executeBuy error ${res.data.ticker}: ${err.message}`));
+        Promise.resolve(_deps.executeBuy(res.data))
+          .catch(err => log.error(`executeBuy error ${res.data.ticker}: ${err.message}`))
+          .finally(() => { pendingBuys--; });
       }
     }
   } catch (err) {

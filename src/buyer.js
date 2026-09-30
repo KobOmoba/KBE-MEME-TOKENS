@@ -223,4 +223,7 @@ async function buildAllPresignedSells(position) {
   return result;
 }
 
-module.exports = { init, executeBuy, buildAllPresignedSells };
+const openCount = () => (positions ? positions.size : 0);
+
+module.exports = {
+  openCount, init, executeBuy, buildAllPresignedSells };

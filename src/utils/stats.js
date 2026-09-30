@@ -104,7 +104,7 @@ function getSummary() {
   const q = (f) => pk.length ? '$' + Math.round(pk[Math.min(pk.length - 1, Math.floor(pk.length * f))]).toLocaleString() : 'n/a';
   const extraLines = [
     `  Watching now: ${stats.watching}`,
-    `  Entered $25k-$35k window: ${stats.enteredWindow}`,
+    `  Reached buy range: ${stats.enteredWindow}`,
     `  Peak mcap of finished tokens: median ${q(0.5)} | p90 ${q(0.9)} | max ${q(0.999)}`,
   ].join('\n');
 

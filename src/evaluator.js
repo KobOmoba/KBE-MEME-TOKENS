@@ -126,7 +126,7 @@ async function evaluateEntry(entry, curve) {
   }
 
   // ── GATE 6: SCORE ─────────────────────────────────────────────────────────
-  if (entry.txnCount == null || now - entry.txnAt > TXN_TTL) {
+  if (cfg.scoreGateEnabled && (entry.txnCount == null || now - entry.txnAt > TXN_TTL)) {   // score is advisory => skip the extra chain call
     const n = await getTxnCount(entry.pda);
     if (n != null) { entry.txnCount = n; entry.txnAt = now; }
   }

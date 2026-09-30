@@ -56,7 +56,7 @@ async function sendScanSummary(s) {
     s.extraLines,
     ``,
     `<b>Entry rules reminder:</b>`,
-    `  Age: &lt;5 min | MCap: $25k-$35k | Liq: &gt;$10k`,
+    `  Age: &lt;5 min | MCap: ${cfg.windowLabel} | Liq: &gt;$${cfg.minLiquidityForBuy}`,
     `  Score: 65/100 | Top10 wallets: &lt;30%`,
   ].join('\n');
 
@@ -81,7 +81,7 @@ async function sendBuyConfirmation(pos) {
     ``,
     `Name:    <b>${pos.name} $${pos.ticker}</b>`,
     `Age:     ${pos.ageStr || '~0 min'}`,
-    `MCap:    $${fmtNum(pos.entryMcap)} (window $25k–$35k)`,
+    `MCap:    $${fmtNum(pos.entryMcap)} (window ${cfg.windowLabel})`,
     `Liq:     $${fmtNum(pos.liquidity)}`,
     `Score:   ${pos.score}/100`,
     `Dev:     ${(pos.devHoldingPct||0).toFixed(1)}% | ${pos.devTxns===0 ? 'No movement 3 min ✅' : `${pos.devTxns} txns ⚠️`}`,
@@ -151,7 +151,7 @@ async function sendStartup(mode) {
   const text = [
     `🚀 <b>AariNAT Sniper V4 — STARTED</b>`,
     `Mode: ${mode}`,
-    `MCap window: $25k–$35k`,
+    `MCap window: ${cfg.windowLabel}`,
     cfg.scoreGateEnabled ? `Score minimum: ${cfg.minScore}/100` : `Score gate: OFF (advisory only)`,
     `Detection: WebSocket (Pump.fun bypassed ✅)`,
     `Loops: Scanner + Monitor + PreSign`,
