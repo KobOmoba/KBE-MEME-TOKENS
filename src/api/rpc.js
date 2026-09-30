@@ -24,10 +24,11 @@ function getConnection() {
     _connection = new Connection(cfg.rpcEndpoint, {
       commitment:         'confirmed',
       wsEndpoint:         cfg.rpcWsEndpoint || undefined,
-      disableRetryOnRateLimit: false,
+      disableRetryOnRateLimit: true,     // V4.2: no 4x retry storm on 429 — the cooldown below handles it
       confirmTransactionInitialTimeout: 30000,
     });
-    log.info(`Connected to RPC: ${cfg.rpcEndpoint.slice(0, 40)}...`);
+    let host = 'rpc'; try { host = new URL(cfg.rpcEndpoint).host; } catch (_) {}
+    log.info(`Connected to RPC: ${host}`);
   }
   return _connection;
 }
@@ -61,6 +62,14 @@ function getWallet() {
   }
   return _wallet;
 }
+
+// ─── 429 cooldown ────────────────────────────────────────────────────────────
+// When the provider says 429 (quota / rate limit) stop calling it for 60s instead of hammering it.
+let _downUntil = 0;
+function markRpcDown(err) {
+  if (/429|too many|max usage/i.test(String(err && err.message || err))) _downUntil = Date.now() + 60000;
+}
+const isRpcDown = () => Date.now() < _downUntil;
 
 // ─── SOL price ───────────────────────────────────────────────────────────────
 // V4.2: price.jup.ag/v6 is retired. The old code retried a dead endpoint (5s timeout)
@@ -131,4 +140,4 @@ async function checkHealth() {
   }
 }
 
-module.exports = { getConnection, resetConnection, getWallet, getSolPrice, checkHealth, PublicKey };
+module.exports = { getConnection, resetConnection, getWallet, getSolPrice, checkHealth, markRpcDown, isRpcDown, PublicKey };

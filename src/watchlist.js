@@ -125,7 +125,10 @@ async function gatherCurves(list) {
       }
     } catch (err) {
       rpcOk = false; counters.chainFails++;
-      log.warn(`RPC unavailable (${String(err.message).slice(0, 60)}) — running on feed data only`);
+      if (Date.now() - (gatherCurves._warnAt || 0) > 60000) {                     // warn once a minute, not every cycle
+        gatherCurves._warnAt = Date.now();
+        log.warn(`RPC unavailable (${String(err.message).slice(0, 60)}) — running on feed data only`);
+      }
     }
   }
   return { curves, rpcOk };

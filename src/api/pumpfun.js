@@ -16,7 +16,7 @@
  */
 
 const { PublicKey } = require('@solana/web3.js');
-const { getConnection, getSolPrice } = require('./rpc');
+const { getConnection, getSolPrice, markRpcDown, isRpcDown } = require('./rpc');
 const log = require('../utils/logger').forTag('PUMPFUN');
 
 const PUMP_FUN_PROGRAM   = new PublicKey('6EF8rrectrRdC4KjqW7GqK9Wz9hEndkbskZaZKzhW9Ep');
@@ -111,13 +111,16 @@ async function getBondingCurveData(mintAddress) {
 async function getBondingCurvesBatch(items) {
   const out = new Map();
   if (!items.length) return out;
+  if (isRpcDown()) throw new Error('RPC cooldown after 429');
 
   const conn     = getConnection();
   const solPrice = await getSolPrice();
 
   for (let i = 0; i < items.length; i += 100) {
     const chunk = items.slice(i, i + 100);
-    const infos = await conn.getMultipleAccountsInfo(chunk.map(x => x.pda), 'confirmed');
+    let infos;
+    try { infos = await conn.getMultipleAccountsInfo(chunk.map(x => x.pda), 'confirmed'); }
+    catch (err) { markRpcDown(err); throw err; }
     chunk.forEach((item, idx) => {
       const info = infos[idx];
       if (!info || !info.data || info.data.length < 49) {
@@ -208,6 +211,7 @@ function ataAddresses(owner, mint) {
  * @returns {{ ok:boolean, top10Pct?, devHoldingPct?, holderCount? }}
  */
 async function getTopHolderConcentration(mintAddress, creator = null) {
+  if (isRpcDown()) return { ok: false };
   try {
     const conn = getConnection();
     const mint = new PublicKey(mintAddress);
@@ -238,18 +242,21 @@ async function getTopHolderConcentration(mintAddress, creator = null) {
       holderCount:   holders.length,
     };
   } catch (err) {
-    log.warn(`getTopHolderConcentration failed for ${mintAddress}: ${err.message}`);
+    markRpcDown(err);
+    if (!isRpcDown()) log.warn(`getTopHolderConcentration failed for ${mintAddress}: ${err.message}`);
     return { ok: false };   // caller retries next cycle — do NOT invent a number
   }
 }
 
 /** Trade count so far (signatures touching the bonding curve, max 1000). */
 async function getTxnCount(pda) {
+  if (isRpcDown()) return null;
   try {
     const sigs = await getConnection().getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed');
     return sigs.length;
   } catch (err) {
-    log.warn(`getTxnCount failed: ${err.message}`);
+    markRpcDown(err);
+    if (!isRpcDown()) log.warn(`getTxnCount failed: ${err.message}`);
     return null;
   }
 }
