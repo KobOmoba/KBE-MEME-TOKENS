@@ -244,3 +244,18 @@ test('EARLY MODE: no mcap floor => buys at ~$5k once safety gates pass; position
   assert.equal(bought.length, 1, 'slot frees => buys'); 
   wl._deps.openCount = origCount; cfg.maxOpenPositions = 1000; cfg.mcapMin = 25000; cfg.minLiquidityForBuy = 10000;
 });
+
+test('Telegram messages carry a tap-to-copy contract address and escape token names', async () => {
+  cfg.telegramBotToken = 'x'; cfg.telegramChatId = '1';
+  const sent = []; const realFetch = global.fetch;
+  global.fetch = async (_u, o) => { sent.push(JSON.parse(o.body).text); return { ok: true, json: async () => ({}) }; };
+  const tg = require('../src/telegram'); const MINT = 'CFETFCd5eHv2pLD1chT3Y2RzUdrDyCbmizGYLtJ2pump';
+  const pos = { mint: MINT, name: 'A & B <x>', ticker: 'AB', paperTrade: true, entryPrice: 1e-6, entryMcap: 4000, liquidity: 700,
+    score: 0, greenFlags: [], redFlags: [], totalRecovered: 0 };
+  await tg.sendBuyConfirmation(pos); await tg.sendExitNotification(pos, 'TIME_EXIT', { percentage: 100, amountOut: 1.9 });
+  global.fetch = realFetch;
+  assert.ok(sent[0].includes(`<code>${MINT}</code>`), 'buy message has copyable CA');
+  assert.ok(sent[0].includes(`pump.fun/coin/${MINT}`), 'buy message has pump.fun link');
+  assert.ok(sent[0].includes('A &amp; B &lt;x&gt;'), 'name is HTML-escaped');
+  assert.ok(sent[1].includes(`<code>${MINT}</code>`), 'exit message has copyable CA');
+});

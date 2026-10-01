@@ -141,7 +141,8 @@ setInterval(async () => {
     if (pos.size > 0) {
       const posLines = Array.from(pos.values()).map(p => {
         const mult = ((p.currentPrice || p.entryPrice) / p.entryPrice).toFixed(2);
-        return `  $${p.ticker}: ${mult}x | t1=${p.tier1Sold} t2=${p.tier2Sold}`;
+        const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `  $${esc(p.ticker)}: ${mult}x | t1=${p.tier1Sold} t2=${p.tier2Sold}\n  <code>${p.mint}</code>`;
       });
       await telegram.sendMessage(`📊 <b>Positions (${pos.size} open)</b>\n${posLines.join('\n')}`);
     }

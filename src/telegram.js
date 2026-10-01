@@ -6,6 +6,14 @@
 const cfg   = require('../config');
 const log   = require('./utils/logger').forTag('TELEGRAM');
 
+// HTML-escape token names/tickers: a "&" or "<" in a name would make Telegram reject the whole message.
+const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Tap-to-copy contract address + one-tap links
+const caLine = (mint) => mint ? `CA:      <code>${mint}</code>` : null;
+const linksLine = (mint) => mint
+  ? `🔗 <a href="https://pump.fun/coin/${mint}">pump.fun</a> · <a href="https://dexscreener.com/solana/${mint}">Dexscreener</a> · <a href="https://solscan.io/token/${mint}">Solscan</a>`
+  : null;
+
 async function sendMessage(text) {
   if (!cfg.telegramBotToken || !cfg.telegramChatId) {
     log.warn('Telegram not configured — message suppressed');
@@ -79,7 +87,9 @@ async function sendBuyConfirmation(pos) {
   const text = [
     `🟢 <b>${mode}EXECUTED — BUY CONFIRMED</b>`,
     ``,
-    `Name:    <b>${pos.name} $${pos.ticker}</b>`,
+    `Name:    <b>${esc(pos.name)} $${esc(pos.ticker)}</b>`,
+    caLine(pos.mint),
+    linksLine(pos.mint),
     `Age:     ${pos.ageStr || '~0 min'}`,
     `MCap:    $${fmtNum(pos.entryMcap)} (window ${cfg.windowLabel})`,
     `Liq:     $${fmtNum(pos.liquidity)}`,
@@ -105,7 +115,7 @@ async function sendBuyConfirmation(pos) {
     `  Moon bag (20%): riding`,
     ``,
     `⏱ 15-min timer: STARTED`,
-  ].join('\n');
+  ].filter(l => l !== null && l !== undefined).join('\n');
 
   await sendMessage(text);
 }
@@ -126,7 +136,8 @@ async function sendExitNotification(pos, reason, details = {}) {
   const text = [
     `${emoji} <b>${mode}EXIT FIRED — ${tierLabel}</b>`,
     ``,
-    `Token:      <b>$${pos.ticker}</b>`,
+    `Token:      <b>$${esc(pos.ticker)}</b>`,
+    caLine(pos.mint),
     `Trigger:    ${tierLabel}`,
     `Sold:       ${details.percentage || '?'}% of position`,
     `Amount out: $${(details.amountOut || 0).toFixed(4)}`,
@@ -134,7 +145,7 @@ async function sendExitNotification(pos, reason, details = {}) {
     `Remaining:  ${details.remainingPct || 0}%`,
     ``,
     `Running total recovered: $${(pos.totalRecovered || 0).toFixed(4)}`,
-  ].join('\n');
+  ].filter(l => l !== null && l !== undefined).join('\n');
 
   await sendMessage(text);
 }
