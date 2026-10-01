@@ -3,7 +3,7 @@
  *
  * CRASH FIX (Task 2): WebSocket drops were causing uncaught errors.
  * This module wraps the connection and re-establishes it automatically.
- * Never uses public RPC — private Helius or Triton endpoint required.
+ * Chain reads: free public node first in PAPER mode, Helius last; LIVE mode keeps the private-first rule.
  */
 
 const { Connection, PublicKey, Keypair } = require('@solana/web3.js');
@@ -63,13 +63,50 @@ function getWallet() {
   return _wallet;
 }
 
-// ─── 429 cooldown ────────────────────────────────────────────────────────────
-// When the provider says 429 (quota / rate limit) stop calling it for 60s instead of hammering it.
-let _downUntil = 0;
-function markRpcDown(err) {
-  if (/429|too many|max usage/i.test(String(err && err.message || err))) _downUntil = Date.now() + 60000;
+// ─── Multi-endpoint chain reads with per-endpoint cooldown ────────────────────
+// Order: paper => [public node, Helius]   live => [Helius, public node]
+// An endpoint that rate-limits (429/403/timeout) is skipped for 60s (15s for other transport errors),
+// so we never hammer a blocked provider. Semantic errors (e.g. "not a token mint") do NOT trip it.
+const READ_ERR = /429|403|too many|max usage|forbidden|rate limit|timed? ?out|ECONN|ETIMEDOUT|EAI_AGAIN|fetch failed|50[234]/i;
+const RATE_ERR = /429|too many|max usage|rate limit/i;
+const _conns = new Map();
+const _downUntil = new Map();
+
+function readEndpoints() {
+  const pub  = cfg.readRpcEndpoint ? [{ name: 'public', url: cfg.readRpcEndpoint }] : [];
+  const priv = cfg.rpcEndpoint     ? [{ name: 'helius', url: cfg.rpcEndpoint }]     : [];
+  return cfg.paperTrade ? [...pub, ...priv] : [...priv, ...pub];
 }
-const isRpcDown = () => Date.now() < _downUntil;
+function connFor(ep) {
+  if (!_conns.has(ep.name)) {
+    _conns.set(ep.name, new Connection(ep.url, { commitment: 'confirmed', disableRetryOnRateLimit: true }));
+    let host = 'rpc'; try { host = new URL(ep.url).host; } catch (_) {}
+    log.info(`Chain-read endpoint ready: ${ep.name} (${host})`);
+  }
+  return _conns.get(ep.name);
+}
+
+async function withRpc(fn) {
+  let lastErr = null;
+  for (const ep of readEndpoints()) {
+    if (Date.now() < (_downUntil.get(ep.name) || 0)) continue;
+    try { return await fn(connFor(ep), ep.name); }
+    catch (err) {
+      const msg = String((err && err.message) || err);
+      if (!READ_ERR.test(msg)) throw err;                                     // not the endpoint's fault
+      lastErr = err;
+      _downUntil.set(ep.name, Date.now() + (RATE_ERR.test(msg) ? 60000 : 15000));
+      log.warn(`RPC ${ep.name} failed (${msg.slice(0, 70)}) — pausing it, trying next`);
+    }
+  }
+  throw lastErr || new Error('RPC cooldown: all endpoints are cooling down');
+}
+
+// Compatibility helpers (older call sites)
+function markRpcDown(err) {
+  if (RATE_ERR.test(String((err && err.message) || err))) readEndpoints().forEach(ep => _downUntil.set(ep.name, Date.now() + 60000));
+}
+const isRpcDown = () => readEndpoints().every(ep => Date.now() < (_downUntil.get(ep.name) || 0));
 
 // ─── SOL price ───────────────────────────────────────────────────────────────
 // V4.2: price.jup.ag/v6 is retired. The old code retried a dead endpoint (5s timeout)
@@ -130,9 +167,8 @@ async function getSolPrice() {
 
 async function checkHealth() {
   try {
-    const conn  = getConnection();
-    const slot  = await conn.getSlot();
-    const epoch = await conn.getEpochInfo();
+    const slot  = await withRpc(c => c.getSlot());
+    const epoch = await withRpc(c => c.getEpochInfo());
     return { ok: true, slot, epoch: epoch.epoch };
   } catch (err) {
     log.error('RPC health check failed:', err.message);
@@ -140,4 +176,4 @@ async function checkHealth() {
   }
 }
 
-module.exports = { getConnection, resetConnection, getWallet, getSolPrice, checkHealth, markRpcDown, isRpcDown, PublicKey };
+module.exports = { getConnection, resetConnection, getWallet, getSolPrice, checkHealth, withRpc, markRpcDown, isRpcDown, _resetRpcState: () => _downUntil.clear(), PublicKey };

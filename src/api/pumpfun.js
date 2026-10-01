@@ -16,7 +16,7 @@
  */
 
 const { PublicKey } = require('@solana/web3.js');
-const { getConnection, getSolPrice, markRpcDown, isRpcDown } = require('./rpc');
+const { getConnection, getSolPrice, withRpc, markRpcDown, isRpcDown } = require('./rpc');
 const log = require('../utils/logger').forTag('PUMPFUN');
 
 const PUMP_FUN_PROGRAM   = new PublicKey('6EF8rrectrRdC4KjqW7GqK9Wz9hEndkbskZaZKzhW9Ep');
@@ -93,11 +93,8 @@ function curveFromData(data, solPrice) {
  * Single-token fetch (kept for compatibility). Returns null if graduated.
  */
 async function getBondingCurveData(mintAddress) {
-  if (isRpcDown()) throw new Error('RPC cooldown after 429');
-  const conn = getConnection();
   const pda  = await getBondingCurvePda(mintAddress);
-  let info;
-  try { info = await conn.getAccountInfo(pda); } catch (err) { markRpcDown(err); throw err; }
+  const info = await withRpc(c => c.getAccountInfo(pda));
   if (!info || !info.data) throw new Error(`No bonding curve account found for ${mintAddress}`);
   const c = curveFromData(info.data, await getSolPrice());
   return c.state === 'ok' ? c : null;
@@ -113,16 +110,12 @@ async function getBondingCurveData(mintAddress) {
 async function getBondingCurvesBatch(items) {
   const out = new Map();
   if (!items.length) return out;
-  if (isRpcDown()) throw new Error('RPC cooldown after 429');
 
-  const conn     = getConnection();
   const solPrice = await getSolPrice();
 
   for (let i = 0; i < items.length; i += 100) {
     const chunk = items.slice(i, i + 100);
-    let infos;
-    try { infos = await conn.getMultipleAccountsInfo(chunk.map(x => x.pda), 'confirmed'); }
-    catch (err) { markRpcDown(err); throw err; }
+    const infos = await withRpc(c => c.getMultipleAccountsInfo(chunk.map(x => x.pda), 'confirmed'));
     chunk.forEach((item, idx) => {
       const info = infos[idx];
       if (!info || !info.data || info.data.length < 49) {
@@ -150,13 +143,12 @@ async function getBondingCurvesBatch(items) {
  *  - creator = fee payer (works for create and create_v2; old fixed index 7 broke on v2)
  */
 async function extractMintFromTx(txSignature) {
-  const conn = getConnection();
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
-      const tx = await conn.getTransaction(txSignature, {
+      const tx = await withRpc(c => c.getTransaction(txSignature, {
         maxSupportedTransactionVersion: 0,
         commitment: 'confirmed',
-      });
+      }));
 
       if (!tx || !tx.transaction) {
         await sleep(400 * attempt);
@@ -213,15 +205,13 @@ function ataAddresses(owner, mint) {
  * @returns {{ ok:boolean, top10Pct?, devHoldingPct?, holderCount? }}
  */
 async function getTopHolderConcentration(mintAddress, creator = null) {
-  if (isRpcDown()) return { ok: false };
   try {
-    const conn = getConnection();
     const mint = new PublicKey(mintAddress);
     const curvePda = await getBondingCurvePda(mintAddress);
     const skip = new Set(ataAddresses(curvePda, mint));
     const devAtas = creator ? new Set(ataAddresses(new PublicKey(creator), mint)) : new Set();
 
-    const largest = await conn.getTokenLargestAccounts(mint);
+    const largest = await withRpc(c => c.getTokenLargestAccounts(mint));
     const rows = largest?.value || [];
     if (!rows.length) return { ok: false };
 
@@ -244,21 +234,18 @@ async function getTopHolderConcentration(mintAddress, creator = null) {
       holderCount:   holders.length,
     };
   } catch (err) {
-    markRpcDown(err);
-    if (!isRpcDown()) log.warn(`getTopHolderConcentration failed for ${mintAddress}: ${err.message}`);
+    if (!isRpcDown()) log.warn(`getTopHolderConcentration failed for ${mintAddress}: ${String(err.message).slice(0, 80)}`);
     return { ok: false };   // caller retries next cycle — do NOT invent a number
   }
 }
 
 /** Trade count so far (signatures touching the bonding curve, max 1000). */
 async function getTxnCount(pda) {
-  if (isRpcDown()) return null;
   try {
-    const sigs = await getConnection().getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed');
+    const sigs = await withRpc(c => c.getSignaturesForAddress(pda, { limit: 1000 }, 'confirmed'));
     return sigs.length;
   } catch (err) {
-    markRpcDown(err);
-    if (!isRpcDown()) log.warn(`getTxnCount failed: ${err.message}`);
+    if (!isRpcDown()) log.warn(`getTxnCount failed: ${String(err.message).slice(0, 80)}`);
     return null;
   }
 }

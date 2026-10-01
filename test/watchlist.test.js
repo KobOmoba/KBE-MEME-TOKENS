@@ -171,7 +171,7 @@ test('PumpPortal is not "healthy" unless connected and delivering (Helius fallba
 // ── V4.2d: PumpPortal primary, RPC verifier/fallback ──────────────────────────
 const feedPrice = {};                                   // mint -> { mcapSol, vSol }
 const realGetLatest = feed.getLatest, realIsConnected = feed.isConnected;
-const useFeed = () => { feed.getLatest = (m) => feedPrice[m] ? { ...feedPrice[m], stale: false } : null; feed.isConnected = () => true; };
+const useFeed = () => { feed.getLatest = (m) => feedPrice[m] ? { ...feedPrice[m], stale: false, ts: Date.now() } : null; feed.isConnected = () => true; };
 const unuseFeed = () => { feed.getLatest = realGetLatest; feed.isConnected = realIsConnected; };
 const sol = (usd) => usd / 150;                         // test SOL price is $150
 
@@ -271,4 +271,27 @@ test('after a 429 the bot stops calling the provider (cooldown) instead of hamme
   await assert.rejects(() => real.getBondingCurvesBatch([{ mint: 'x', pda: null }]), /cooldown/);
   assert.deepEqual(await real.getTopHolderConcentration('So11111111111111111111111111111111111111112'), { ok: false });
   assert.equal(await real.getTxnCount(null), null);
+});
+
+test('chain reads: public node first (paper), Helius only after the public one fails; semantic errors never trip a cooldown', async () => {
+  const r = require('../src/api/rpc'); r._resetRpcState();
+  const prevRpc = cfg.rpcEndpoint, prevPaper = cfg.paperTrade; cfg.rpcEndpoint = 'https://helius.example.invalid/?api-key=x';
+  assert.equal(await r.withRpc(async (_c, name) => name), 'public', 'paper => public first');
+  assert.equal(await r.withRpc(async (_c, name) => { if (name === 'public') throw new Error('429 Too Many Requests'); return name; }), 'helius');
+  assert.equal(await r.withRpc(async (_c, name) => name), 'helius', 'public is cooling down, not called again');
+  r._resetRpcState();
+  await assert.rejects(() => r.withRpc(async () => { throw new Error('Invalid param: not a Token mint'); }), /not a Token mint/);
+  assert.equal(await r.withRpc(async (_c, name) => name), 'public', 'semantic error did not put the endpoint on cooldown');
+  cfg.paperTrade = false; assert.equal(await r.withRpc(async (_c, name) => name), 'helius', 'LIVE mode => private endpoint first');
+  cfg.paperTrade = prevPaper; cfg.rpcEndpoint = prevRpc; r._resetRpcState();
+});
+
+test('a stale feed price is not trusted: the token is read from the chain instead', async () => {
+  wl._entries.clear(); useFeed(); let chainItems = 0; const orig = wl._deps.getBondingCurvesBatch;
+  wl._deps.getBondingCurvesBatch = async (i) => { chainItems += i.length; return orig(i); };
+  const m = spawn(); feedPrice[m] = { mcapSol: sol(4000), vSol: 32 };
+  feed.getLatest = (mm) => mm === m ? { ...feedPrice[m], stale: false, ts: Date.now() - 120000 } : null;   // 2 minutes old
+  mcaps[m] = 4300; await wl.runCycle();
+  assert.ok(chainItems >= 1, 'old feed record => chain read'); assert.ok(Math.abs(wl._entries.get(m)?.firstMcap - 4300) < 1 || !wl._entries.has(m));
+  wl._deps.getBondingCurvesBatch = orig; wl._entries.clear(); unuseFeed();
 });

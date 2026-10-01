@@ -25,6 +25,7 @@ let onTrade  = () => {};
 let getWatched = () => [];
 let retry = 0;
 let lastCreateAt = 0;
+const diag = { createMsgs: 0, tradeMsgs: 0, notices: [], sampleTrade: null };
 let anomalyCount = 0, noticeCount = 0, otherCount = 0, subLogCount = 0;   // diagnostics: first few unusual messages only
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
@@ -73,19 +74,21 @@ function connect() {
     if (!m) return;
     if (m.message || m.errors) {                                  // acks / errors from PumpPortal
       if (noticeCount++ < 8) log.info('PP notice: ' + JSON.stringify(m).slice(0, 300));
+      if (diag.notices.length < 3) diag.notices.push(JSON.stringify(m).slice(0, 160));
       return;
     }
     if (!m.mint) return;
 
     record(m);                                                    // keep latest price for watched mints
     if (m.txType === 'create') {
-      lastCreateAt = Date.now();
+      lastCreateAt = Date.now(); diag.createMsgs++;
       if (!sampleLogged.create) { sampleLogged.create = true; log.info('PP sample create: ' + JSON.stringify(m).slice(0, 700)); }
       onCreate({
         mint: m.mint, creator: m.traderPublicKey || null, name: m.name, symbol: m.symbol,
         creationTime: Date.now(), source: 'pumpportal',
       });
     } else if (m.txType === 'buy' || m.txType === 'sell') {
+      diag.tradeMsgs++; if (!diag.sampleTrade) diag.sampleTrade = JSON.stringify(m).slice(0, 260);
       if (!sampleLogged.trade) { sampleLogged.trade = true; log.info('PP sample trade: ' + JSON.stringify(m).slice(0, 700)); }
       onTrade({ mint: m.mint, trader: m.traderPublicKey, type: m.txType, sol: Number(m.solAmount) || 0 });
     } else if (otherCount++ < 5) {
@@ -123,8 +126,9 @@ function unsubscribe(mint) {
 function pin(mint) { pinned.add(mint); subscribe(mint); }
 const getLatest = (mint) => latest.get(mint) || null;
 const isConnected = () => connected;
+const getDiag = () => diag;
 // Healthy = connected AND a create event arrived in the last 60s. If the message shape ever
 // differs from what we expect, this goes false and Helius log-detection takes over again.
 const isHealthy = () => connected && (Date.now() - lastCreateAt) < 60000;
 
-module.exports = { start, subscribe, unsubscribe, pin, getLatest, isConnected, isHealthy };
+module.exports = { start, subscribe, unsubscribe, pin, getLatest, getDiag, isConnected, isHealthy };

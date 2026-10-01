@@ -25,6 +25,7 @@ const { evaluateEntry } = require('./evaluator');
 const { executeBuy } = require('./buyer');
 const feed = require('./api/pumpportal');
 const stats = require('./utils/stats');
+const telegram = require('./telegram');
 const log = require('./utils/logger').forTag('WATCHLIST');
 
 const entries = new Map();          // mint -> entry
@@ -93,7 +94,7 @@ async function gatherCurves(list) {
 
   for (const e of list) {
     const fl = feed.getLatest(e.mint);
-    if (fl && !fl.stale && feedUp) {
+    if (fl && !fl.stale && feedUp && (Date.now() - fl.ts) < 45000) {            // old record => don't trust, read the chain
       const mcapUSD = fl.mcapSol * solPrice;
       curves.set(e.mint, {
         state: 'ok', source: 'feed', marketCapUSD: mcapUSD, priceUSD: mcapUSD / 1e9,
@@ -259,6 +260,29 @@ async function runCycle() {
   }
 }
 
+// Plain-language feed check sent to Telegram (no terminal needed): is PumpPortal actually delivering trades?
+async function sendFeedCheck() {
+  try {
+    const d = feed.getDiag(), rpcMod = rpc;
+    let live = 0, total = 0;
+    try {
+      const pos = require('./tracker').getPositions();
+      for (const p of pos.values()) { total++; const fl = feed.getLatest(p.mint); if (fl && !fl.stale && Date.now() - fl.ts < 30000) live++; }
+    } catch (_) {}
+    const esc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await telegram.sendMessage([
+      '📡 <b>FEED CHECK</b>',
+      `PumpPortal: ${feed.isHealthy() ? 'HEALTHY' : feed.isConnected() ? 'CONNECTED, NO DATA' : 'DOWN'}`,
+      `Create messages: ${d.createMsgs} | Trade messages: ${d.tradeMsgs}`,
+      `Open positions with a fresh live price: ${live}/${total}`,
+      `Chain reads: ${rpcMod.isRpcDown() ? 'ALL ENDPOINTS COOLING DOWN' : 'OK'} (reads ${counters.chainReads}, failed ${counters.chainFails})`,
+      `Detected: portal ${counters.addedPortal} | logs ${counters.addedLogs} | tx ${counters.addedTx}`,
+      d.notices.length ? `PumpPortal notices:\n${d.notices.map(n => '  ' + esc(n)).join('\n')}` : 'PumpPortal notices: none',
+      d.sampleTrade ? `Sample trade:\n  ${esc(d.sampleTrade)}` : '⚠️ Sample trade: NONE RECEIVED (trade stream not delivering)',
+    ].join('\n'));
+  } catch (err) { log.warn('feed check failed: ' + err.message); }
+}
+
 function start() {
   if (timer) return;
   feed.start({
@@ -273,6 +297,8 @@ function start() {
       + ` | create-logs seen ${c.createLogs} decoded ${c.decodeOk} failed ${c.decodeFail} | feed trades ${c.trades}`
       + ` | chain reads ${c.chainReads} fails ${c.chainFails} | portal ${feed.isHealthy() ? 'HEALTHY' : feed.isConnected() ? 'CONNECTED-NO-DATA' : 'DOWN'}`);
   }, 60000);
+  setTimeout(sendFeedCheck, 3 * 60000);
+  setInterval(sendFeedCheck, 30 * 60000);
   log.info(`Watchlist started — cycle every ${cfg.watchIntervalMs / 1000}s, max ${cfg.maxWatchlist} tokens, shadow-track ${cfg.shadowTrackMinutes} min`);
 }
 

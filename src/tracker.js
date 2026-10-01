@@ -75,7 +75,7 @@ async function checkPosition(pos) {
   // V4.2d: PumpPortal feed first (free, real-time); on-chain read only if the feed has a gap.
   let priced = false;
   const fl = feed.getLatest(pos.mint);
-  if (fl && !fl.stale && feed.isConnected()) {
+  if (fl && !fl.stale && feed.isConnected() && (Date.now() - fl.ts) < 30000) {   // stale feed price = frozen price => verify on chain instead
     currentPrice = fl.mcapSol * (await rpc.getSolPrice()) / 1e9;
     pos.currentPrice = currentPrice; priced = true;
   }

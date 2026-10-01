@@ -79,6 +79,9 @@ module.exports = {
   // ─── NETWORK ────────────────────────────────────────────────────────────────
   // Never use public RPC. Must be Helius or Triton private endpoint.
   rpcEndpoint:      process.env.RPC_ENDPOINT   || '',
+  // Chain READS (prices, holders): free public node first in paper mode, Helius last. In LIVE mode the
+  // spec rule applies instead: private endpoint first, public only as a fallback.
+  readRpcEndpoint:  process.env.READ_RPC_ENDPOINT || 'https://api.mainnet-beta.solana.com',
   rpcWsEndpoint:    process.env.RPC_WS_ENDPOINT || '',   // Helius WS — LAST resort for log detection
   // Tier 2 log source (onLogs / logsSubscribe). Non-Helius by default; override in .env with any
   // Solana WebSocket you trust (a free-tier provider is more reliable than the public endpoint).
