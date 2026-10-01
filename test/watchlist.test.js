@@ -261,7 +261,9 @@ test('Telegram messages carry a tap-to-copy contract address and escape token na
 });
 
 test('after a 429 the bot stops calling the provider (cooldown) instead of hammering it', async () => {
-  const rpcMod = require('../src/api/rpc'); const real = require('../src/api/pumpfun');
+  const rpcMod = require('../src/api/rpc');
+  delete require.cache[require.resolve('../src/api/pumpfun')];          // earlier tests replaced functions with stubs
+  const real = require('../src/api/pumpfun');                            // => load the genuine module
   assert.equal(rpcMod.isRpcDown(), false);
   rpcMod.markRpcDown(new Error('429 Too Many Requests: max usage reached'));
   assert.equal(rpcMod.isRpcDown(), true);
