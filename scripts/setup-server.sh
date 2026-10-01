@@ -28,8 +28,8 @@ npm install --no-audit --no-fund
 
 echo "== 5/6 settings (.env)"
 if [ ! -f .env ]; then
-  read -r -p "Telegram BOT TOKEN: " TG_TOKEN
-  read -r -p "Telegram CHAT ID: " TG_CHAT
+  read -r -p "Telegram BOT TOKEN: " TG_TOKEN < /dev/tty
+  read -r -p "Telegram CHAT ID: " TG_CHAT < /dev/tty
   cat > .env <<ENVEOF
 PAPER_TRADE=true
 AUTO_TRADE=false
