@@ -53,10 +53,13 @@ async function main() {
     log.warn('⚠️  LIVE TRADING ACTIVE — REAL MONEY AT RISK');
   }
 
-  if (!cfg.rpcEndpoint) {
-    log.error('FATAL: RPC_ENDPOINT not set.');
+  // Paper mode reads the chain from the free public node (READ_RPC_ENDPOINT). A private endpoint is
+  // only mandatory for LIVE trading, where it is the first choice.
+  if (!cfg.paperTrade && !cfg.rpcEndpoint) {
+    log.error('FATAL: RPC_ENDPOINT not set (required for LIVE trading).');
     process.exit(1);
   }
+  if (cfg.paperTrade && !cfg.rpcEndpoint) log.info('No private RPC_ENDPOINT set — paper mode uses the public node for chain reads');
 
   if (!cfg.paperTrade && !cfg.privateKey) {
     log.error('FATAL: WALLET_PRIVATE_KEY not set for live trading');
