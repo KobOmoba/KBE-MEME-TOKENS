@@ -21,6 +21,7 @@ const cfg = require('../config');
 const { getTopHolderConcentration, getTxnCount } = require('./api/pumpfun');
 const { getTokenMeta } = require('./api/helius');
 const { scoreToken }   = require('./utils/scorer');
+const portal = require('./api/pumpportal');
 const stats = require('./utils/stats');
 const log   = require('./utils/logger').forTag('EVALUATOR');
 
@@ -88,7 +89,7 @@ async function evaluateEntry(entry, curve) {
   if (meta.freezeAuthorityRevoked === false) redFlags.push('Freeze authority NOT revoked ❌');
   else greenFlags.push('Freeze authority revoked ✅');
 
-  const feed = !!entry.feed;      // do we have live trade data for this token?
+  const feed = !!entry.feed && portal.isTradeStreamOk();   // live trade data only if PumpPortal really streams it
   if (feed && entry.devSold) redFlags.push('Developer SOLD ❌');
   else if (feed && entry.devTxns > 0 && ageMinutes < 2) redFlags.push('Developer transacting in first 2 min ❌');
 
@@ -110,6 +111,13 @@ async function evaluateEntry(entry, curve) {
   const { top10Pct, devHoldingPct } = entry.holders;
   const holdersKnown = top10Pct != null;
   const devTxns = feed ? entry.devTxns : null;
+
+  if (holdersKnown && devHoldingPct != null) {                 // chain-only dev-sell check (no trade stream needed)
+    if (entry.devBase == null) entry.devBase = devHoldingPct;
+    else if (entry.devBase >= 2 && devHoldingPct < entry.devBase * 0.5) {
+      return DROP('RED_FLAG', [`Developer SOLD — holding fell ${entry.devBase.toFixed(1)}% -> ${devHoldingPct.toFixed(1)}% ❌`]);
+    }
+  }
 
   if (!holdersKnown) {
     greenFlags.push('⚠️ Holders unverified — RPC unavailable (paper only)');
@@ -166,11 +174,11 @@ async function evaluateEntry(entry, curve) {
     ageStr, ageMinutes,
     entryPrice: curve.priceUSD, entryMcap: mcap, liquidity: liq,
     score, scoreBreakdown: breakdown, scoreScaled: scaled,
-    buySellRatio: buySellRatio ?? 0,
+    buySellRatio,                         // null = unknown (shown as n/a)
     transactionCount: txnCount ?? 0,
-    devHoldingPct: devHoldingPct ?? 0,
-    devTxns: devTxns ?? 0,
-    top10Pct: top10Pct ?? 0, greenFlags, redFlags,
+    devHoldingPct,                        // null = unknown
+    devTxns,                              // null = unknown
+    top10Pct, greenFlags, redFlags,
     hasTwitter: !!meta.hasTwitter, hasTelegram: !!meta.hasTelegram, hasWebsite: !!meta.hasWebsite,
     entryMode: entry.wasAbove ? 'dip' : 'climb',
     peakMcapAtEntry: entry.peakMcap,

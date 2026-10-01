@@ -295,3 +295,27 @@ test('a stale feed price is not trusted: the token is read from the chain instea
   assert.ok(chainItems >= 1, 'old feed record => chain read'); assert.ok(Math.abs(wl._entries.get(m)?.firstMcap - 4300) < 1 || !wl._entries.has(m));
   wl._deps.getBondingCurvesBatch = orig; wl._entries.clear(); unuseFeed();
 });
+
+test('PumpPortal paywall notice switches the trade stream OFF; unknowns stay unknown (no fake "dev did not move")', async () => {
+  const real = require('../src/api/pumpportal');
+  real._handleMessage(JSON.stringify({ message: "'subscribeTokenTrade' and 'subscribeAccountTrade' methods are only available when connecting with an API key funded with at least 0.02 SOL." }));
+  assert.equal(real.isTradeStreamOk(), false);
+  wl._entries.clear(); bought.length = 0; holders = { ok: true, top10Pct: 18, devHoldingPct: 2 };
+  const m = spawn(); mcaps[m] = 28000; await wl.runCycle();
+  assert.equal(bought.length, 1);
+  assert.equal(bought[0].devTxns, null, 'dev activity is UNKNOWN, not 0');
+  assert.equal(bought[0].buySellRatio, null);
+  real._resetTradeStream();
+});
+
+test('chain-only dev-sell check: dev holding halves => rejected', async () => {
+  wl._entries.clear(); bought.length = 0; useFeed();
+  const m = spawn(); mcaps[m] = 28000; holders = { ok: true, top10Pct: 18, devHoldingPct: 8 };
+  cfg.mcapMin = 25000; await wl.runCycle();                      // first look: baseline 8%  (bought in this test setup, so re-add another)
+  wl._entries.clear(); bought.length = 0;
+  const m2 = spawn(); const e2 = wl._entries.get(m2); e2.devBase = 8; mcaps[m2] = 28000;
+  holders = { ok: true, top10Pct: 18, devHoldingPct: 3 }; e2.holders = null;
+  await wl.runCycle();
+  assert.equal(bought.length, 0, 'dev sold ~60% => no buy'); assert.equal(wl._entries.has(m2), false);
+  holders = { ok: true, top10Pct: 18, devHoldingPct: 2 }; unuseFeed();
+});

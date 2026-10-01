@@ -16,7 +16,8 @@ const WebSocket = require('ws');
 const cfg = require('../../config');
 const log = require('../utils/logger').forTag('PUMPPORTAL');
 
-const URL = 'wss://pumpportal.fun/api/data';
+const BASE_URL = 'wss://pumpportal.fun/api/data';
+const wsUrl = () => cfg.pumpPortalApiKey ? `${BASE_URL}?api-key=${cfg.pumpPortalApiKey}` : BASE_URL;   // never logged
 
 let ws = null;
 let connected = false;
@@ -25,7 +26,10 @@ let onTrade  = () => {};
 let getWatched = () => [];
 let retry = 0;
 let lastCreateAt = 0;
-const diag = { createMsgs: 0, tradeMsgs: 0, notices: [], sampleTrade: null };
+// PumpPortal's free tier only streams NEW TOKENS. Trade streams need an API key funded with >= 0.02 SOL.
+// Once PumpPortal says so, we stop asking and stop pretending we have trade data.
+let tradeStreamOk = true;
+const diag = { createMsgs: 0, tradeMsgs: 0, notices: [], sampleTrade: null, tradeBlocked: false };
 let anomalyCount = 0, noticeCount = 0, otherCount = 0, subLogCount = 0;   // diagnostics: first few unusual messages only
 let sampleLogged = { create: false, trade: false };
 const subscribed = new Set();
@@ -58,23 +62,32 @@ function start(handlers) {
 }
 
 function connect() {
-  ws = new WebSocket(URL);
+  ws = new WebSocket(wsUrl());
 
   ws.on('open', () => {
     connected = true; retry = 0; subscribed.clear();
     log.info('PumpPortal connected');
     send({ method: 'subscribeNewToken' });
     const mints = [...new Set([...getWatched(), ...pinned])];
-    if (mints.length) { send({ method: 'subscribeTokenTrade', keys: mints }); mints.forEach(m => subscribed.add(m)); }
+    if (mints.length && tradeStreamOk) { send({ method: 'subscribeTokenTrade', keys: mints }); mints.forEach(m => subscribed.add(m)); }
   });
 
-  ws.on('message', (raw) => {
+  ws.on('message', handleMessage);
+  ws.on('error', (e) => log.warn('PumpPortal error: ' + e.message));
+  ws.on('close', onClose);
+}
+
+function handleMessage(raw) {
     let m;
     try { m = JSON.parse(raw.toString()); } catch { return; }
     if (!m) return;
     if (m.message || m.errors) {                                  // acks / errors from PumpPortal
       if (noticeCount++ < 8) log.info('PP notice: ' + JSON.stringify(m).slice(0, 300));
       if (diag.notices.length < 3) diag.notices.push(JSON.stringify(m).slice(0, 160));
+      if (/funded|api key/i.test(String(m.message || ''))) {
+        if (tradeStreamOk) log.warn('PumpPortal trade stream needs a funded API key — running WITHOUT trade data (prices come from the chain)');
+        tradeStreamOk = false; diag.tradeBlocked = true;
+      }
       return;
     }
     if (!m.mint) return;
@@ -94,21 +107,19 @@ function connect() {
     } else if (otherCount++ < 5) {
       log.info('PP other message: ' + JSON.stringify(m).slice(0, 400));
     }
-  });
+}
 
-  ws.on('error', (e) => log.warn('PumpPortal error: ' + e.message));
-  ws.on('close', () => {
+function onClose() {
     connected = false; subscribed.clear();
     latest.forEach(v => { v.stale = true; });                    // gap in the feed: prices unreliable until next event
     const delay = Math.min(3000 * ++retry, 30000);
     log.warn(`PumpPortal closed — reconnect in ${delay / 1000}s`);
     setTimeout(connect, delay);
-  });
 }
 
 /** Subscribe to trades for a mint. Returns true if the subscription was actually sent. */
 function subscribe(mint) {
-  if (!connected) return false;
+  if (!connected || !tradeStreamOk) return false;
   if (subscribed.has(mint)) return true;
   send({ method: 'subscribeTokenTrade', keys: [mint] });
   if (subLogCount++ < 3) log.info('PP → subscribeTokenTrade ' + mint.slice(0, 8) + '...');
@@ -127,8 +138,10 @@ function pin(mint) { pinned.add(mint); subscribe(mint); }
 const getLatest = (mint) => latest.get(mint) || null;
 const isConnected = () => connected;
 const getDiag = () => diag;
+const isTradeStreamOk = () => tradeStreamOk;
 // Healthy = connected AND a create event arrived in the last 60s. If the message shape ever
 // differs from what we expect, this goes false and Helius log-detection takes over again.
 const isHealthy = () => connected && (Date.now() - lastCreateAt) < 60000;
 
-module.exports = { start, subscribe, unsubscribe, pin, getLatest, getDiag, isConnected, isHealthy };
+module.exports = { start, subscribe, unsubscribe, pin, getLatest, getDiag, isConnected, isHealthy, isTradeStreamOk,
+  _handleMessage: handleMessage, _resetTradeStream: () => { tradeStreamOk = true; diag.tradeBlocked = false; } };

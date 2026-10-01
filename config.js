@@ -59,6 +59,7 @@ module.exports = {
   maxWatchlist:      400,
   shadowMinPeak:     10000,    // only follow past 5 min tokens that peaked above this (else every token is tracked and the list overflows)
   shadowTrackMinutes: 30,      // keep following tokens that reached $25k after the 5-min buy cutoff (data only, never bought)      // safety cap for RAM / RPC on the 956MB server
+  pumpPortalApiKey:  process.env.PUMPPORTAL_API_KEY || '',   // optional: live trade stream needs a key funded with >= 0.02 SOL
   pumpPortalEnabled: process.env.PUMPPORTAL !== 'off',   // trade feed + backup detection
   watchLogFile:      './data/watch_log.jsonl',           // per-token mcap trajectories (research data)
 

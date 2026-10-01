@@ -278,7 +278,8 @@ async function sendFeedCheck() {
       `Chain reads: ${rpcMod.isRpcDown() ? 'ALL ENDPOINTS COOLING DOWN' : 'OK'} (reads ${counters.chainReads}, failed ${counters.chainFails})`,
       `Detected: portal ${counters.addedPortal} | logs ${counters.addedLogs} | tx ${counters.addedTx}`,
       d.notices.length ? `PumpPortal notices:\n${d.notices.map(n => '  ' + esc(n)).join('\n')}` : 'PumpPortal notices: none',
-      d.sampleTrade ? `Sample trade:\n  ${esc(d.sampleTrade)}` : '⚠️ Sample trade: NONE RECEIVED (trade stream not delivering)',
+      d.tradeBlocked ? 'Trade stream: NOT AVAILABLE (PumpPortal needs a funded API key). Prices come from the chain; dev activity and buy/sell ratio are unknown.'
+        : d.sampleTrade ? `Sample trade:\n  ${esc(d.sampleTrade)}` : '⚠️ Sample trade: NONE RECEIVED (trade stream not delivering)',
     ].join('\n'));
   } catch (err) { log.warn('feed check failed: ' + err.message); }
 }
