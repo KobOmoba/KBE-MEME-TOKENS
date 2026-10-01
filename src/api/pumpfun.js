@@ -93,9 +93,11 @@ function curveFromData(data, solPrice) {
  * Single-token fetch (kept for compatibility). Returns null if graduated.
  */
 async function getBondingCurveData(mintAddress) {
+  if (isRpcDown()) throw new Error('RPC cooldown after 429');
   const conn = getConnection();
   const pda  = await getBondingCurvePda(mintAddress);
-  const info = await conn.getAccountInfo(pda);
+  let info;
+  try { info = await conn.getAccountInfo(pda); } catch (err) { markRpcDown(err); throw err; }
   if (!info || !info.data) throw new Error(`No bonding curve account found for ${mintAddress}`);
   const c = curveFromData(info.data, await getSolPrice());
   return c.state === 'ok' ? c : null;

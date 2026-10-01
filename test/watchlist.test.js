@@ -259,3 +259,14 @@ test('Telegram messages carry a tap-to-copy contract address and escape token na
   assert.ok(sent[0].includes('A &amp; B &lt;x&gt;'), 'name is HTML-escaped');
   assert.ok(sent[1].includes(`<code>${MINT}</code>`), 'exit message has copyable CA');
 });
+
+test('after a 429 the bot stops calling the provider (cooldown) instead of hammering it', async () => {
+  const rpcMod = require('../src/api/rpc'); const real = require('../src/api/pumpfun');
+  assert.equal(rpcMod.isRpcDown(), false);
+  rpcMod.markRpcDown(new Error('429 Too Many Requests: max usage reached'));
+  assert.equal(rpcMod.isRpcDown(), true);
+  await assert.rejects(() => real.getBondingCurveData('So11111111111111111111111111111111111111112'), /cooldown/);
+  await assert.rejects(() => real.getBondingCurvesBatch([{ mint: 'x', pda: null }]), /cooldown/);
+  assert.deepEqual(await real.getTopHolderConcentration('So11111111111111111111111111111111111111112'), { ok: false });
+  assert.equal(await real.getTxnCount(null), null);
+});

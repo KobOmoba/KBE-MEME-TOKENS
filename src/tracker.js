@@ -79,7 +79,7 @@ async function checkPosition(pos) {
     currentPrice = fl.mcapSol * (await rpc.getSolPrice()) / 1e9;
     pos.currentPrice = currentPrice; priced = true;
   }
-  if (!priced) {
+  if (!priced && !rpc.isRpcDown()) {          // feed gap AND provider healthy => one chain read
     try {
       const curve = await getBondingCurveData(pos.mint);
       if (curve) {

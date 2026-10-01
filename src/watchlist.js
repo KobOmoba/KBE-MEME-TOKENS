@@ -200,6 +200,7 @@ async function runCycle() {
     const { curves } = await gatherCurves([...entries.values()]);
 
     // 3. evaluate
+    const capFull = _deps.openCount() + pendingBuys >= cfg.maxOpenPositions;
     for (const e of [...entries.values()]) {
       if (!entries.has(e.mint)) continue;
       const curve = curves.get(e.mint);
@@ -222,6 +223,11 @@ async function runCycle() {
 
       if (e.shadow) {                                             // follow only, never buy
         if (curve && curve.state === 'graduated') finalize(e, 'SHADOW_END', 'GRADUATED', {});
+        continue;
+      }
+
+      if (capFull) {                                              // no free slot: skip the (chain-calling) gates
+        e.lastBlocker = 'POSITION_CAP'; e.lastDetail = {};
         continue;
       }
 
